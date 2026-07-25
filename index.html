@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MT Framework TEX ↔ PNG </title>
+<title>Universal MT Framework TEX ↔ PNG Studio (Kuriimu2 Edition)</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 :root{
@@ -167,7 +167,7 @@ h1{font-size:22px;font-weight:500;margin-bottom:4px;}
 
 <script>
 // ══════════════════════════════════════════════════════════
-// CRC32 + minimal ZIP writer (store method)
+// CRC32 + minimal ZIP writer
 // ══════════════════════════════════════════════════════════
 const CRC32T=(()=>{const t=new Uint32Array(256);for(let i=0;i<256;i++){let c=i;for(let j=0;j<8;j++)c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);t[i]=c;}return t;})();
 function crc32Bytes(bytes){let c=0xFFFFFFFF;for(let i=0;i<bytes.length;i++)c=CRC32T[(c^bytes[i])&0xFF]^(c>>>8);return(c^0xFFFFFFFF)>>>0;}
@@ -261,9 +261,10 @@ function parseTexHeader(u8){
     throw new Error('Missing "TEX " magic — not an MT Framework texture.');
   }
 
-  const isBigEndian = (magic === ' XET');
-  const dv=new DataView(u8.buffer,u8.byteOffset,u8.byteLength);
-  const version = dv.getUint16(4, isBigEndian);
+  // NOTE: In DataView methods, littleEndian=true means Little-Endian!
+  const isLittleEndian = (magic !== ' XET');
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  const version = dv.getUint16(4, isLittleEndian);
   
   let format=0, width=0, height=0, mipCount=1, headerSize=16;
 
@@ -279,16 +280,16 @@ function parseTexHeader(u8){
   } else {
     // Versions 26, 151, 157, 160, 162, 164: Desktop & Console MT Framework
     format = dv.getUint8(6);
-    if(format === 0) format = dv.getUint16(6, isBigEndian);
+    if(format === 0) format = dv.getUint16(6, isLittleEndian);
     
     // Check standard 16-bit dimension fields (offset 0x08 & 0x0A)
-    width = dv.getUint16(8, isBigEndian);
-    height = dv.getUint16(10, isBigEndian);
+    width = dv.getUint16(8, isLittleEndian);
+    height = dv.getUint16(10, isLittleEndian);
     
     // Fallback to 32-bit dimensions if 16-bit values are 0 or out of alignment
     if(width === 0 || height === 0 || width > 16384 || height > 16384){
-      width = dv.getUint32(12, isBigEndian);
-      height = dv.getUint32(16, isBigEndian);
+      width = dv.getUint32(12, isLittleEndian);
+      height = dv.getUint32(16, isLittleEndian);
       headerSize = 32;
     } else {
       headerSize = 16;
@@ -297,7 +298,7 @@ function parseTexHeader(u8){
   }
 
   if(width === 0 || height === 0) throw new Error(`Parsed version 0x${version.toString(16)} successfully, but dimensions resolved to 0×0. File may be encrypted or use an unsupported swizzle.`);
-  return {magic, version, format, width, height, mipCount, headerSize, isBigEndian};
+  return {magic, version, format, width, height, mipCount, headerSize, isLittleEndian};
 }
 
 function detectGpuDependent(header, fileLength){
@@ -457,8 +458,8 @@ function processTexBuffer(u8){
     const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
     const tblOff = header.headerSize;
     if(u8.length < tblOff + 24) throw new Error('File too short for GPU container offset table.');
-    const offsets = [dv.getUint32(tblOff, true), dv.getUint32(tblOff+4, true), dv.getUint32(tblOff+8, true)];
-    const sizes = [dv.getUint32(tblOff+12, true), dv.getUint32(tblOff+16, true), dv.getUint32(tblOff+20, true)];
+    const offsets = [dv.getUint32(tblOff, header.isLittleEndian), dv.getUint32(tblOff+4, header.isLittleEndian), dv.getUint32(tblOff+8, header.isLittleEndian)];
+    const sizes = [dv.getUint32(tblOff+12, header.isLittleEndian), dv.getUint32(tblOff+16, header.isLittleEndian), dv.getUint32(tblOff+20, header.isLittleEndian)];
     const formats = header.format===0x0C ? [0xFD,0xFE,0xFF] : [header.format,header.format,header.format];
     for(let i=0; i<3; i++){
       if(i>0 && offsets[i]===offsets[0]) continue;
@@ -600,7 +601,7 @@ function createTexFile(rgba, width, height, format, targetVersion){
   else if(format===0xFD || format===0x1F || format===0x15) payload=encodeDXT5(rgba, width, height);
   else throw new Error('Unsupported encode format selected.');
 
-  const hdrSize = (targetVersion === 9) ? 16 : 16; // Standard 16-byte header generation
+  const hdrSize = 16;
   const out = new Uint8Array(hdrSize + payload.length);
   const dv = new DataView(out.buffer);
   
@@ -662,7 +663,7 @@ async function loadOneDec(file){
       ['Dimensions', header.width+' × '+header.height],
       ['Engine Version', verStr],
       ['Format Code', '0x'+header.format.toString(16).toUpperCase().padStart(2,'0')+' — '+(FORMAT_NAMES[header.format]||'Unknown')],
-      ['Header Layout', header.isBigEndian ? 'Big-Endian Console' : (isGpu ? 'GPU Container Table' : 'Standard Direct')],
+      ['Header Layout', !header.isLittleEndian ? 'Big-Endian Console' : (isGpu ? 'GPU Container Table' : 'Standard Direct')],
       ['Mip Levels', String(header.mipCount)+' (base level shown)'],
       ['File Size', formatBytes(u8.length)]
     ];
@@ -773,551 +774,6 @@ function downloadAllZipEnc(){
   if(!allEncExports.length) return; const seen=new Map();
   const files=allEncExports.map(f=>{ let name=f.name, count=seen.get(name)||0; if(count>0){ const dot=name.lastIndexOf('.'); name = dot>=0? name.slice(0,dot)+'_'+count+name.slice(dot) : name+'_'+count; } seen.set(f.name,count+1); return {name,data:f.data}; });
   dlBlob(new Blob([buildZip(files)],{type:'application/zip'}), 'png_converted_mt_tex.zip');
-}
-</script>
-</body>
-</html>
-.empty-note{font-size:13px;color:var(--text-tertiary);text-align:center;padding:1.5rem 0;}
-
-.result-card{border:0.5px solid var(--border-t);border-radius:var(--r-lg);background:var(--bg-primary);padding:1rem 1.25rem;margin-bottom:12px;}
-.result-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;}
-.result-name{font-family:monospace;font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.result-close{background:none;border:none;color:var(--text-tertiary);cursor:pointer;font-size:13px;padding:2px 7px;border-radius:6px;flex-shrink:0;}
-.result-close:hover{background:var(--bg-danger);color:var(--text-danger);}
-
-.img-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;margin-top:10px;}
-.img-card{background:var(--bg-secondary);border-radius:var(--r-md);padding:10px;display:flex;flex-direction:column;gap:8px;}
-.img-canvas-wrap{background:
-  linear-gradient(45deg,rgba(128,128,128,.25) 25%,transparent 25%),
-  linear-gradient(-45deg,rgba(128,128,128,.25) 25%,transparent 25%),
-  linear-gradient(45deg,transparent 75%,rgba(128,128,128,.25) 75%),
-  linear-gradient(-45deg,transparent 75%,rgba(128,128,128,.25) 75%);
-  background-size:16px 16px;background-position:0 0,0 8px,8px -8px,-8px 0;
-  border-radius:6px;overflow:hidden;display:flex;align-items:center;justify-content:center;min-height:120px;}
-.img-canvas-wrap canvas{max-width:100%;image-rendering:pixelated;display:block;}
-.img-label{font-size:11.5px;font-weight:500;}
-.img-meta{font-size:10.5px;color:var(--text-tertiary);font-family:monospace;}
-.raw-note{font-size:11px;color:var(--text-warn);background:var(--bg-warn);border-radius:6px;padding:6px 8px;line-height:1.4;}
-.hint{font-size:11.5px;color:var(--text-tertiary);margin-top:8px;line-height:1.5;}
-
-.select-fmt{font-family:inherit;font-size:12px;padding:5px 8px;border-radius:6px;border:0.5px solid var(--border-s);background:var(--bg-primary);color:var(--text-primary);width:100%;margin-top:4px;}
-.enc-opts{display:flex;align-items:center;gap:12px;margin-bottom:10px;font-size:13px;color:var(--text-secondary);flex-wrap:wrap;}
-</style>
-</head>
-<body>
-<div class="wrap">
-  <h1>MT Framework TEX ↔ PNG Converter</h1>
-  <p class="sub">Convert Capcom MT Framework <strong>Mobile</strong> <code>.tex</code> textures (version 9) to viewable PNGs, or encode standard PNGs back into mobile `.tex` format directly in the browser.</p>
-
-  <div class="tabs">
-    <button class="tab-btn active" id="tab-dec-btn" onclick="switchTab('dec')">TEX → PNG (Decode)</button>
-    <button class="tab-btn" id="tab-enc-btn" onclick="switchTab('enc')">PNG → TEX (Encode)</button>
-  </div>
-
-  <!-- DECODE TAB -->
-  <div id="tab-dec">
-    <div class="card">
-      <div class="card-title">Load textures</div>
-      <label class="drop" id="drop-zone-dec">
-        <div class="drop-icon"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div>
-        <span class="drop-label">Click or drop .tex file(s)</span>
-        <span class="drop-hint">Magic "TEX ", version 9 (MT Framework Mobile). Multiple files supported.</span>
-        <input type="file" id="file-input-dec" accept=".tex,*" multiple>
-      </label>
-      <p class="hint">Supports RGBA8888, RGBA4444, ETC1, and DXT5/BC3 to real pixels. GPU container (0x0C) sub-images are automatically extracted.</p>
-    </div>
-
-    <div class="card" id="batch-card-dec" style="display:none">
-      <div class="card-title">Results <span class="card-title-right" id="batch-count-dec"></span></div>
-      <div class="btn-row">
-        <button class="btn btn-primary" id="btn-download-all-dec" onclick="downloadAllZipDec()" disabled>Download all PNGs as .zip</button>
-        <button class="btn" onclick="clearAllDec()">Clear all</button>
-      </div>
-    </div>
-    <div id="results-dec"></div>
-  </div>
-
-  <!-- ENCODE TAB -->
-  <div id="tab-enc" style="display:none">
-    <div class="card">
-      <div class="card-title">Load PNGs to create .tex</div>
-      <div class="enc-opts">
-        <span>Default Target Format:</span>
-        <select class="select-fmt" id="global-enc-fmt" style="width:auto">
-          <option value="1">0x01 — RGBA8888 (32-bit, Lossless)</option>
-          <option value="7">0x07 — RGBA4444 (16-bit, Lightweight)</option>
-          <option value="253" selected>0xFD — DXT5 / BC3 (8-bit, Standard Compressed)</option>
-        </select>
-      </div>
-      <label class="drop" id="drop-zone-enc">
-        <div class="drop-icon"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div>
-        <span class="drop-label">Click or drop .png file(s)</span>
-        <span class="drop-hint">Will be converted to MT Framework Mobile v9 .tex format with 1 mipmap level.</span>
-        <input type="file" id="file-input-enc" accept="image/png,image/*" multiple>
-      </label>
-      <p class="hint">Note: Block compressed formats like DXT5 require image dimensions (width/height) to be multiples of 4. RGBA8888 and RGBA4444 support arbitrary dimensions.</p>
-    </div>
-
-    <div class="card" id="batch-card-enc" style="display:none">
-      <div class="card-title">Results <span class="card-title-right" id="batch-count-enc"></span></div>
-      <div class="btn-row">
-        <button class="btn btn-primary" id="btn-download-all-enc" onclick="downloadAllZipEnc()" disabled>Download all .tex as .zip</button>
-        <button class="btn" onclick="clearAllEnc()">Clear all</button>
-      </div>
-    </div>
-    <div id="results-enc"></div>
-  </div>
-</div>
-
-<script>
-// ══════════════════════════════════════════════════════════
-// CRC32 + minimal ZIP writer (store method)
-// ══════════════════════════════════════════════════════════
-const CRC32T=(()=>{const t=new Uint32Array(256);for(let i=0;i<256;i++){let c=i;for(let j=0;j<8;j++)c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);t[i]=c;}return t;})();
-function crc32Bytes(bytes){let c=0xFFFFFFFF;for(let i=0;i<bytes.length;i++)c=CRC32T[(c^bytes[i])&0xFF]^(c>>>8);return(c^0xFFFFFFFF)>>>0;}
-function buildZip(files){
-  const enc=new TextEncoder(); const localParts=[]; const central=[]; let offset=0;
-  for(const f of files){
-    const nameBytes=enc.encode(f.name);
-    const crc=crc32Bytes(f.data); const size=f.data.length;
-    const lh=new Uint8Array(30+nameBytes.length); const dv=new DataView(lh.buffer);
-    dv.setUint32(0,0x04034b50,true); dv.setUint16(4,20,true); dv.setUint16(6,0,true);
-    dv.setUint16(8,0,true); dv.setUint16(10,0,true); dv.setUint16(12,0,true);
-    dv.setUint32(14,crc,true); dv.setUint32(18,size,true); dv.setUint32(22,size,true);
-    dv.setUint16(26,nameBytes.length,true); dv.setUint16(28,0,true);
-    lh.set(nameBytes,30);
-    localParts.push(lh,f.data);
-    central.push({nameBytes,crc,size,offset});
-    offset+=lh.length+f.data.length;
-  }
-  const centralParts=[]; let centralSize=0;
-  for(const c of central){
-    const ch=new Uint8Array(46+c.nameBytes.length); const dv=new DataView(ch.buffer);
-    dv.setUint32(0,0x02014b50,true); dv.setUint16(4,20,true); dv.setUint16(6,20,true);
-    dv.setUint16(8,0,true); dv.setUint16(10,0,true); dv.setUint16(12,0,true); dv.setUint16(14,0,true);
-    dv.setUint32(16,c.crc,true); dv.setUint32(20,c.size,true); dv.setUint32(24,c.size,true);
-    dv.setUint16(28,c.nameBytes.length,true); dv.setUint16(30,0,true); dv.setUint16(32,0,true);
-    dv.setUint16(34,0,true); dv.setUint16(36,0,true); dv.setUint32(38,0,true);
-    dv.setUint32(42,c.offset,true);
-    ch.set(c.nameBytes,46);
-    centralParts.push(ch); centralSize+=ch.length;
-  }
-  const end=new Uint8Array(22); const dv=new DataView(end.buffer);
-  dv.setUint32(0,0x06054b50,true); dv.setUint16(8,central.length,true); dv.setUint16(10,central.length,true);
-  dv.setUint32(12,centralSize,true); dv.setUint32(16,offset,true);
-  const total=offset+centralSize+22; const out=new Uint8Array(total); let p=0;
-  for(const part of localParts){out.set(part,p);p+=part.length;}
-  for(const part of centralParts){out.set(part,p);p+=part.length;}
-  out.set(end,p);
-  return out;
-}
-
-// ══════════════════════════════════════════════════════════
-// MT Framework Mobile TEX constants & helpers
-// ══════════════════════════════════════════════════════════
-const FORMAT_NAMES={
-  0x01:'RGBA8888', 0x07:'RGBA4444', 0x0A:'ETC1', 0x0B:'PVRTC 4bpp',
-  0x0D:'PVRTC-A 4bpp', 0x0C:'GPU container (DXT5/PVRTC-A/ATC)',
-  0xFD:'DXT5 / BC3', 0xFE:'PVRTC-A 4bpp', 0xFF:'ATC (interpolated alpha)'
-};
-const BITDEPTH={0x01:32, 0x07:16, 0x0A:4, 0x0B:4, 0x0D:4, 0xFD:8, 0xFE:4, 0xFF:8};
-
-function clamp8(v){ return v<0?0:v>255?255:v; }
-function formatBytes(b){ if(b<1024) return b+' B'; if(b<1048576) return (b/1024).toFixed(1)+' KB'; return (b/1048576).toFixed(2)+' MB'; }
-function escapeHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-function baseName(n){ return n.replace(/\.[^.]+$/,''); }
-function slug(s){ return s.replace(/[^a-z0-9]+/gi,'_').replace(/^_+|_+$/g,'').toLowerCase(); }
-function dlBlob(blob,name){ const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(url),4000); }
-function readArrayBuffer(f){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=e=>res(e.target.result); r.onerror=rej; r.readAsArrayBuffer(f); }); }
-function canvasToPngBytes(canvas){ return new Promise(resolve=>{ canvas.toBlob(blob=>{ blob.arrayBuffer().then(buf=>resolve(new Uint8Array(buf))); },'image/png'); }); }
-
-// ══════════════════════════════════════════════════════════
-// DECODE LOGIC (TEX → PNG)
-// ══════════════════════════════════════════════════════════
-function parseTexHeader(u8){
-  if(u8.length<16) throw new Error('File is too small to be a TEX header (need at least 16 bytes).');
-  const magic=String.fromCharCode(u8[0],u8[1],u8[2],u8[3]);
-  if(magic!=='TEX ') throw new Error('Missing "TEX " magic — not an MT Framework texture.');
-  const dv=new DataView(u8.buffer,u8.byteOffset,u8.byteLength);
-  const b1=dv.getUint32(4,true);
-  const version=b1&0xFFFF, format=(b1>>16)&0xFF, unk1=(b1>>24)&0xFF;
-  if(version!==9) throw new Error(`Version 0x${version.toString(16)} is not Mobile v9.`);
-  const b2=dv.getUint32(8,true);
-  const unk2=b2&0xF, r1=(b2>>4)&0x0FFFFFFF;
-  const b3=dv.getUint32(12,true);
-  const width=b3&0x1FFF, height=(b3>>13)&0x1FFF;
-  const mipCount=Math.max(1,(b3>>26)&0xF), unk3=(b3>>30)&0x3;
-  if(width===0||height===0) throw new Error('Invalid width/height (0).');
-  return {magic,version,format,unk1,unk2,r1,width,height,mipCount,unk3};
-}
-
-function detectGpuDependent(header,fileLength){
-  if(header.format===0x0C) return true;
-  const bd=BITDEPTH[header.format];
-  if(bd===undefined) return true;
-  let expected=16;
-  for(let i=0;i<header.mipCount;i++) expected += Math.max(1,header.width>>i)*Math.max(1,header.height>>i)*bd/8;
-  return expected!==fileLength;
-}
-
-function decodeRGBA8888(data,width,height){
-  const out=new Uint8ClampedArray(width*height*4);
-  out.set(data.subarray(0,Math.min(data.length,out.length)));
-  return out;
-}
-function decodeRGBA4444(data,width,height){
-  const out=new Uint8ClampedArray(width*height*4);
-  const n=width*height;
-  for(let i=0;i<n;i++){
-    const off=i*2; if(off+1>=data.length) break;
-    const word=(data[off]<<8)|data[off+1];
-    out[i*4]=((word>>12)&0xF)*17; out[i*4+1]=((word>>8)&0xF)*17; out[i*4+2]=((word>>4)&0xF)*17; out[i*4+3]=(word&0xF)*17;
-  }
-  return out;
-}
-const ETC1_MOD=[[2,8],[5,17],[9,29],[13,42],[18,60],[24,80],[33,106],[47,183]];
-function decodeETC1(data,width,height){
-  const out=new Uint8ClampedArray(width*height*4);
-  const blocksX=Math.ceil(width/4), blocksY=Math.ceil(height/4);
-  let p=0;
-  for(let by=0;by<blocksY;by++){
-    for(let bx=0;bx<blocksX;bx++){
-      if(p+8>data.length) break;
-      const b0=data[p],b1=data[p+1],b2=data[p+2],b3=data[p+3];
-      const flip=(b3&0x1)!==0, diff=(b3&0x2)!==0;
-      const table0=(b3>>5)&0x7, table1=(b3>>2)&0x7;
-      let r1,g1,bb1,r2,g2,bb2;
-      if(diff){
-        const r=(b0>>3)&0x1F, g=(b1>>3)&0x1F, bl=(b2>>3)&0x1F;
-        let dr=b0&0x7; if(dr&4) dr-=8; let dg=b1&0x7; if(dg&4) dg-=8; let db=b2&0x7; if(db&4) db-=8;
-        r1=(r<<3)|(r>>2); g1=(g<<3)|(g>>2); bb1=(bl<<3)|(bl>>2);
-        const r2v=r+dr, g2v=g+dg, b2v=bl+db;
-        r2=(r2v<<3)|(r2v>>2); g2=(g2v<<3)|(g2v>>2); bb2=(b2v<<3)|(b2v>>2);
-      } else {
-        const r1n=b0>>4, r2n=b0&0xF, g1n=b1>>4, g2n=b1&0xF, b1n=b2>>4, b2n=b2&0xF;
-        r1=(r1n<<4)|r1n; g1=(g1n<<4)|g1n; bb1=(b1n<<4)|b1n; r2=(r2n<<4)|r2n; g2=(g2n<<4)|g2n; bb2=(b2n<<4)|b2n;
-      }
-      const msbPlane=(data[p+4]<<8)|data[p+5], lsbPlane=(data[p+6]<<8)|data[p+7];
-      for(let x=0;x<4;x++){
-        for(let y=0;y<4;y++){
-          const px=bx*4+x, py=by*4+y; if(px>=width||py>=height) continue;
-          const idx=x*4+y, bit=15-idx;
-          const msb=(msbPlane>>bit)&1, lsb=(lsbPlane>>bit)&1;
-          const sub2 = flip ? (y>=2) : (x>=2);
-          const baseR=sub2?r2:r1, baseG=sub2?g2:g1, baseB=sub2?bb2:bb1;
-          const delta = msb? -ETC1_MOD[sub2?table1:table0][lsb] : ETC1_MOD[sub2?table1:table0][lsb];
-          const o=(py*width+px)*4;
-          out[o]=clamp8(baseR+delta); out[o+1]=clamp8(baseG+delta); out[o+2]=clamp8(baseB+delta); out[o+3]=255;
-        }
-      }
-      p+=8;
-    }
-  }
-  return out;
-}
-function decodeDXT5(data,width,height){
-  const out=new Uint8ClampedArray(width*height*4);
-  const blocksX=Math.ceil(width/4), blocksY=Math.ceil(height/4);
-  let p=0;
-  for(let by=0;by<blocksY;by++){
-    for(let bx=0;bx<blocksX;bx++){
-      if(p+16>data.length) break;
-      const a0=data[p], a1=data[p+1];
-      let alphaTable;
-      if(a0>a1) alphaTable=[a0,a1,(6*a0+a1)/7,(5*a0+2*a1)/7,(4*a0+3*a1)/7,(3*a0+4*a1)/7,(2*a0+5*a1)/7,(a0+6*a1)/7];
-      else alphaTable=[a0,a1,(4*a0+a1)/5,(3*a0+2*a1)/5,(2*a0+3*a1)/5,(a0+4*a1)/5,0,255];
-      let alphaBits=0n;
-      for(let i=0;i<6;i++) alphaBits |= BigInt(data[p+2+i])<<BigInt(8*i);
-      const alphaIdx=new Array(16);
-      for(let i=0;i<16;i++) alphaIdx[i]=Number((alphaBits>>BigInt(3*i))&7n);
-
-      const c0=data[p+8]|(data[p+9]<<8), c1=data[p+10]|(data[p+11]<<8);
-      const r0=((c0>>11)&0x1F)*255/31, g0=((c0>>5)&0x3F)*255/63, b0c=(c0&0x1F)*255/31;
-      const r1=((c1>>11)&0x1F)*255/31, g1=((c1>>5)&0x3F)*255/63, b1c=(c1&0x1F)*255/31;
-      const colors=[[r0,g0,b0c],[r1,g1,b1c],[(2*r0+r1)/3,(2*g0+g1)/3,(2*b0c+b1c)/3],[(r0+2*r1)/3,(g0+2*g1)/3,(b0c+2*b1c)/3]];
-      const idxBits=data[p+12]|(data[p+13]<<8)|(data[p+14]<<16)|(data[p+15]<<24);
-
-      for(let y=0;y<4;y++){
-        for(let x=0;x<4;x++){
-          const px=bx*4+x, py=by*4+y; if(px>=width||py>=height) continue;
-          const pixIdx=y*4+x, ci=(idxBits>>(2*pixIdx))&3;
-          const [r,g,b]=colors[ci], a=alphaTable[alphaIdx[pixIdx]];
-          const o=(py*width+px)*4;
-          out[o]=r; out[o+1]=g; out[o+2]=b; out[o+3]=a;
-        }
-      }
-      p+=16;
-    }
-  }
-  return out;
-}
-function decodeSubImage(fmt,bytes,width,height){
-  switch(fmt){
-    case 0x01: return decodeRGBA8888(bytes,width,height);
-    case 0x07: return decodeRGBA4444(bytes,width,height);
-    case 0x0A: return decodeETC1(bytes,width,height);
-    case 0xFD: return decodeDXT5(bytes,width,height);
-    default: return null;
-  }
-}
-function processTexBuffer(u8){
-  const header=parseTexHeader(u8);
-  const isGpu=detectGpuDependent(header,u8.length);
-  const images=[];
-  if(isGpu){
-    if(u8.length<40) throw new Error('File too short for GPU offset table.');
-    const dv=new DataView(u8.buffer,u8.byteOffset,u8.byteLength);
-    const offsets=[dv.getUint32(16,true),dv.getUint32(20,true),dv.getUint32(24,true)];
-    const sizes=[dv.getUint32(28,true),dv.getUint32(32,true),dv.getUint32(36,true)];
-    const formats = header.format===0x0C ? [0xFD,0xFE,0xFF] : [header.format,header.format,header.format];
-    for(let i=0;i<3;i++){
-      if(i>0 && offsets[i]===offsets[0]) continue;
-      const bd=BITDEPTH[formats[i]]; let size=sizes[i];
-      if(!size && bd) size=Math.ceil(header.width*header.height*bd/8);
-      if(!size || offsets[i]>=u8.length) continue;
-      if(offsets[i]+size>u8.length) size=u8.length-offsets[i];
-      const raw=u8.slice(offsets[i],offsets[i]+size);
-      images.push({format:formats[i],width:header.width,height:header.height,raw,rgba:decodeSubImage(formats[i],raw,header.width,header.height)});
-    }
-  } else {
-    const bd=BITDEPTH[header.format];
-    const size = bd? Math.ceil(header.width*header.height*bd/8) : (u8.length-16);
-    const raw=u8.slice(16,16+Math.max(0,size));
-    images.push({format:header.format,width:header.width,height:header.height,raw,rgba:decodeSubImage(header.format,raw,header.width,header.height)});
-  }
-  if(images.length===0) throw new Error('No image data located.');
-  return {header,isGpu,images};
-}
-
-// ══════════════════════════════════════════════════════════
-// ENCODE LOGIC (PNG → TEX)
-// ══════════════════════════════════════════════════════════
-function encodeRGBA8888(rgba){ return new Uint8Array(rgba); }
-
-function encodeRGBA4444(rgba,width,height){
-  const n=width*height; const out=new Uint8Array(n*2);
-  for(let i=0;i<n;i++){
-    const r=rgba[i*4]>>4, g=rgba[i*4+1]>>4, b=rgba[i*4+2]>>4, a=rgba[i*4+3]>>4;
-    const word=(r<<12)|(g<<8)|(b<<4)|a;
-    out[i*2]=word>>8; out[i*2+1]=word&0xFF;
-  }
-  return out;
-}
-
-function rgbTo565(r,g,b){ return ((r>>3)<<11)|((g>>2)<<5)|(b>>3); }
-function encodeDXT5(rgba,width,height){
-  const blocksX=Math.ceil(width/4), blocksY=Math.ceil(height/4);
-  const out=new Uint8Array(blocksX*blocksY*16);
-  let p=0;
-  for(let by=0;by<blocksY;by++){
-    for(let bx=0;bx<blocksX;bx++){
-      const alphas=new Uint8Array(16); const colors=new Uint8Array(48);
-      let minA=255, maxA=0, minR=255, minG=255, minB=255, maxR=0, maxG=0, maxB=0;
-      for(let y=0;y<4;y++){
-        for(let x=0;x<4;x++){
-          const px=Math.min(width-1,bx*4+x), py=Math.min(height-1,by*4+y);
-          const idx=(py*width+px)*4, i=y*4+x;
-          const r=rgba[idx], g=rgba[idx+1], b=rgba[idx+2], a=rgba[idx+3];
-          alphas[i]=a; colors[i*3]=r; colors[i*3+1]=g; colors[i*3+2]=b;
-          if(a<minA) minA=a; if(a>maxA) maxA=a;
-          if(r<minR) minR=r; if(r>maxR) maxR=r; if(g<minG) minG=g; if(g>maxG) maxG=g; if(b<minB) minB=b; if(b>maxB) maxB=b;
-        }
-      }
-      // 1. Alpha Block
-      out[p]=maxA; out[p+1]=minA; let aBits=0n;
-      for(let i=0;i<16;i++){
-        let idx=0;
-        if(maxA!==minA){
-          idx=Math.round(((maxA-alphas[i])/(maxA-minA))*7);
-          if(idx===0) idx=0; else if(idx===7) idx=1; else idx=idx+1;
-        }
-        aBits |= BigInt(idx)<<BigInt(3*i);
-      }
-      for(let i=0;i<6;i++) out[p+2+i]=Number((aBits>>BigInt(8*i))&0xFFn);
-
-      // 2. Color Block (DXT1)
-      let c0=rgbTo565(maxR,maxG,maxB), c1=rgbTo565(minR,minG,minB);
-      if(c0===c1 && c0>0) c1--; if(c0<c1){ const tmp=c0; c0=c1; c1=tmp; }
-      out[p+8]=c0&0xFF; out[p+9]=c0>>8; out[p+10]=c1&0xFF; out[p+11]=c1>>8;
-
-      const r0=((c0>>11)&0x1F)*255/31, g0=((c0>>5)&0x3F)*255/63, b0c=(c0&0x1F)*255/31;
-      const r1=((c1>>11)&0x1F)*255/31, g1=((c1>>5)&0x3F)*255/63, b1c=(c1&0x1F)*255/31;
-      const pal=[[r0,g0,b0c],[r1,g1,b1c],[(2*r0+r1)/3,(2*g0+g1)/3,(2*b0c+b1c)/3],[(r0+2*r1)/3,(g0+2*g1)/3,(b0c+2*b1c)/3]];
-
-      let cBits=0;
-      for(let i=0;i<16;i++){
-        const r=colors[i*3], g=colors[i*3+1], b=colors[i*3+2];
-        let bestDist=Infinity, bestIdx=0;
-        for(let ci=0;ci<4;ci++){
-          const dr=r-pal[ci][0], dg=g-pal[ci][1], db=b-pal[ci][2];
-          const dist=dr*dr+dg*dg+db*db;
-          if(dist<bestDist){ bestDist=dist; bestIdx=ci; }
-        }
-        cBits |= (bestIdx<<(2*i));
-      }
-      out[p+12]=cBits&0xFF; out[p+13]=(cBits>>8)&0xFF; out[p+14]=(cBits>>16)&0xFF; out[p+15]=(cBits>>24)&0xFF;
-      p+=16;
-    }
-  }
-  return out;
-}
-
-function createTexFile(rgba,width,height,format){
-  let payload;
-  if(format===0x01) payload=encodeRGBA8888(rgba);
-  else if(format===0x07) payload=encodeRGBA4444(rgba,width,height);
-  else if(format===0xFD) payload=encodeDXT5(rgba,width,height);
-  else throw new Error('Unsupported export format');
-
-  const out=new Uint8Array(16+payload.length);
-  const dv=new DataView(out.buffer);
-  out[0]=0x54; out[1]=0x45; out[2]=0x58; out[3]=0x20; // "TEX "
-  dv.setUint32(4, 9 | (format<<16), true); // version=9, format, unk1=0
-  dv.setUint32(8, 0, true); // unk2=0, r1=0
-  dv.setUint32(12, (width&0x1FFF) | ((height&0x1FFF)<<13) | (1<<26), true); // width, height, mipCount=1
-  out.set(payload,16);
-  return out;
-}
-
-// ══════════════════════════════════════════════════════════
-// UI & EVENT HANDLERS
-// ══════════════════════════════════════════════════════════
-function switchTab(t){
-  document.getElementById('tab-dec-btn').classList.toggle('active', t==='dec');
-  document.getElementById('tab-enc-btn').classList.toggle('active', t==='enc');
-  document.getElementById('tab-dec').style.display = t==='dec' ? '' : 'none';
-  document.getElementById('tab-enc').style.display = t==='enc' ? '' : 'none';
-}
-
-// DECODE EVENTS
-let decSeq=1; const allDecExports=[];
-const dropDec=document.getElementById('drop-zone-dec'), inputDec=document.getElementById('file-input-dec');
-dropDec.addEventListener('dragover',e=>{e.preventDefault();dropDec.classList.add('dragover');});
-dropDec.addEventListener('dragleave',()=>dropDec.classList.remove('dragover'));
-dropDec.addEventListener('drop',e=>{e.preventDefault();dropDec.classList.remove('dragover');if(e.dataTransfer.files.length)loadDecFiles([...e.dataTransfer.files]);});
-inputDec.addEventListener('change',()=>{if(inputDec.files.length)loadDecFiles([...inputDec.files]);inputDec.value='';});
-
-async function loadDecFiles(files){
-  for(const f of files) await loadOneDec(f);
-  document.getElementById('batch-card-dec').style.display = allDecExports.length ? '' : (document.querySelectorAll('#results-dec .result-card').length ? '' : 'none');
-  document.getElementById('btn-download-all-dec').disabled = allDecExports.length===0;
-}
-async function loadOneDec(file){
-  const id='dec'+(decSeq++);
-  const results=document.getElementById('results-dec');
-  const card=document.createElement('div'); card.className='result-card'; card.id=id;
-  card.innerHTML=`<div class="result-head"><span class="result-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span><button class="result-close" onclick="document.getElementById('${id}').remove()">&#10005;</button></div><div class="status"><span class="dot"></span><span>Parsing…</span></div>`;
-  results.prepend(card); document.getElementById('batch-card-dec').style.display='';
-  try{
-    const u8=new Uint8Array(await readArrayBuffer(file));
-    const {header,isGpu,images}=processTexBuffer(u8);
-    const metaRows=[['Dimensions',header.width+' × '+header.height],['Format','0x'+header.format.toString(16).toUpperCase().padStart(2,'0')+' — '+(FORMAT_NAMES[header.format]||'unknown')],['Layout',isGpu?'GPU-variant (offset table)':'direct'],['Mip levels',String(header.mipCount)+' (base level shown)'],['File size',formatBytes(u8.length)],['Sub-images',String(images.length)]];
-    let html=`<div class="meta-grid">`+metaRows.map(([l,v])=>`<div class="metric"><div class="metric-label">${l}</div><div class="metric-val" title="${escapeHtml(v)}">${escapeHtml(v)}</div></div>`).join('')+`</div><div class="img-grid" id="${id}-grid"></div>`;
-    card.innerHTML=`<div class="result-head"><span class="result-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span><button class="result-close" onclick="document.getElementById('${id}').remove()">&#10005;</button></div>${html}`;
-    const grid=document.getElementById(id+'-grid');
-    for(const img of images){
-      const label=(FORMAT_NAMES[img.format]||('0x'+img.format.toString(16))), outName=baseName(file.name)+(images.length>1?'_'+slug(label):'')+'.png';
-      if(img.rgba){
-        const canvas=document.createElement('canvas'); canvas.width=img.width; canvas.height=img.height;
-        canvas.getContext('2d').putImageData(new ImageData(img.rgba,img.width,img.height),0,0);
-        const cell=document.createElement('div'); cell.className='img-card';
-        cell.innerHTML=`<div class="img-canvas-wrap"></div><div class="img-label">${escapeHtml(label)}</div><div class="img-meta">${img.width}×${img.height} · PNG</div><div class="btn-row"><button class="btn btn-sm">Download PNG</button></div>`;
-        cell.querySelector('.img-canvas-wrap').appendChild(canvas); grid.appendChild(cell);
-        const pngBytes=await canvasToPngBytes(canvas); allDecExports.push({name:outName,data:pngBytes});
-        cell.querySelector('button').addEventListener('click',()=>dlBlob(new Blob([pngBytes],{type:'image/png'}),outName));
-      } else {
-        const rawName=baseName(file.name)+'_'+slug(label)+'.raw', cell=document.createElement('div'); cell.className='img-card';
-        cell.innerHTML=`<div class="raw-note">No in-browser decoder for <strong>${escapeHtml(label)}</strong> yet — extracted as raw bytes.</div><div class="img-meta">${img.width}×${img.height} · ${formatBytes(img.raw.length)} raw</div><div class="btn-row"><button class="btn btn-sm">Download raw</button></div>`;
-        grid.appendChild(cell); allDecExports.push({name:rawName,data:img.raw});
-        cell.querySelector('button').addEventListener('click',()=>dlBlob(new Blob([img.raw],{type:'application/octet-stream'}),rawName));
-      }
-    }
-  }catch(err){
-    card.innerHTML=`<div class="result-head"><span class="result-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span><button class="result-close" onclick="document.getElementById('${id}').remove()">&#10005;</button></div><div class="status err"><span class="dot"></span><span>${escapeHtml(err.message)}</span></div>`;
-  }
-}
-function clearAllDec(){ document.getElementById('results-dec').innerHTML=''; allDecExports.length=0; document.getElementById('batch-card-dec').style.display='none'; document.getElementById('btn-download-all-dec').disabled=true; }
-function downloadAllZipDec(){
-  if(!allDecExports.length) return; const seen=new Map();
-  const files=allDecExports.map(f=>{ let name=f.name, count=seen.get(name)||0; if(count>0){ const dot=name.lastIndexOf('.'); name = dot>=0? name.slice(0,dot)+'_'+count+name.slice(dot) : name+'_'+count; } seen.set(f.name,count+1); return {name,data:f.data}; });
-  dlBlob(new Blob([buildZip(files)],{type:'application/zip'}), 'tex_converted_pngs.zip');
-}
-
-// ENCODE EVENTS
-let encSeq=1; const allEncExports=[];
-const dropEnc=document.getElementById('drop-zone-enc'), inputEnc=document.getElementById('file-input-enc');
-dropEnc.addEventListener('dragover',e=>{e.preventDefault();dropEnc.classList.add('dragover');});
-dropEnc.addEventListener('dragleave',()=>dropEnc.classList.remove('dragover'));
-dropEnc.addEventListener('drop',e=>{e.preventDefault();dropEnc.classList.remove('dragover');if(e.dataTransfer.files.length)loadEncFiles([...e.dataTransfer.files]);});
-inputEnc.addEventListener('change',()=>{if(inputEnc.files.length)loadEncFiles([...inputEnc.files]);inputEnc.value='';});
-
-async function loadEncFiles(files){
-  for(const f of files) await loadOneEnc(f);
-  document.getElementById('batch-card-enc').style.display = allEncExports.length ? '' : (document.querySelectorAll('#results-enc .result-card').length ? '' : 'none');
-  document.getElementById('btn-download-all-enc').disabled = allEncExports.length===0;
-}
-async function loadOneEnc(file){
-  const id='enc'+(encSeq++);
-  const results=document.getElementById('results-enc');
-  const card=document.createElement('div'); card.className='result-card'; card.id=id;
-  card.innerHTML=`<div class="result-head"><span class="result-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span><button class="result-close" onclick="document.getElementById('${id}').remove()">&#10005;</button></div><div class="status"><span class="dot"></span><span>Reading image…</span></div>`;
-  results.prepend(card); document.getElementById('batch-card-enc').style.display='';
-  try{
-    const img=new Image(); img.src=URL.createObjectURL(file);
-    await new Promise((res,rej)=>{img.onload=res;img.onerror=rej;});
-    const w=img.width, h=img.height;
-    const canvas=document.createElement('canvas'); canvas.width=w; canvas.height=h;
-    const ctx=canvas.getContext('2d'); ctx.drawImage(img,0,0);
-    const rgba=ctx.getImageData(0,0,w,h).data;
-    URL.revokeObjectURL(img.src);
-
-    const defaultFmt = parseInt(document.getElementById('global-enc-fmt').value, 10);
-    const metaRows=[['Dimensions',w+' × '+h],['Pixels',String(w*h)],['Input Size',formatBytes(file.size)]];
-    let html=`<div class="meta-grid">`+metaRows.map(([l,v])=>`<div class="metric"><div class="metric-label">${l}</div><div class="metric-val">${v}</div></div>`).join('')+`</div>`;
-    html+=`<div class="img-grid" id="${id}-grid"><div class="img-card"><div class="img-canvas-wrap"></div><div class="img-label">Target Format:</div><select class="select-fmt" id="${id}-fmt"><option value="1" ${defaultFmt===1?'selected':''}>0x01 — RGBA8888 (32-bit)</option><option value="7" ${defaultFmt===7?'selected':''}>0x07 — RGBA4444 (16-bit)</option><option value="253" ${defaultFmt===253?'selected':''}>0xFD — DXT5 / BC3 (8-bit)</option></select><div class="img-meta" id="${id}-est"></div><div class="btn-row"><button class="btn btn-primary btn-sm" id="${id}-dl">Download .tex</button></div></div></div>`;
-    
-    card.innerHTML=`<div class="result-head"><span class="result-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span><button class="result-close" onclick="document.getElementById('${id}').remove()">&#10005;</button></div>${html}`;
-    card.querySelector('.img-canvas-wrap').appendChild(canvas);
-
-    const fmtSelect=document.getElementById(`${id}-fmt`), estLabel=document.getElementById(`${id}-est`), dlBtn=document.getElementById(`${id}-dl`);
-    
-    const updateEst=()=>{
-      const fmt=parseInt(fmtSelect.value,10);
-      let estSize=0;
-      if(fmt===1) estSize=16+(w*h*4);
-      else if(fmt===7) estSize=16+(w*h*2);
-      else if(fmt===253) estSize=16+(Math.ceil(w/4)*Math.ceil(h/4)*16);
-      if(fmt===253 && (w%4!==0 || h%4!==0)){
-        estLabel.style.color='var(--text-danger)'; estLabel.textContent=`Warning: ${w}×${h} not multiple of 4! DXT5 may artifact.`;
-      } else {
-        estLabel.style.color='var(--text-tertiary)'; estLabel.textContent=`Output size: ~${formatBytes(estSize)} · 1 Mipmap`;
-      }
-    };
-    fmtSelect.addEventListener('change', updateEst); updateEst();
-
-    const doEncode=()=>{
-      const fmt=parseInt(fmtSelect.value,10);
-      return createTexFile(rgba,w,h,fmt);
-    };
-
-    const outName=baseName(file.name)+'.tex';
-    // Add lazy exporter for batch ZIP
-    const exportObj={name:outName, get data(){ return doEncode(); }};
-    allEncExports.push(exportObj);
-
-    dlBtn.addEventListener('click',()=>{
-      const texBytes=doEncode();
-      dlBlob(new Blob([texBytes],{type:'application/octet-stream'}), outName);
-    });
-  }catch(err){
-    card.innerHTML=`<div class="result-head"><span class="result-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span><button class="result-close" onclick="document.getElementById('${id}').remove()">&#10005;</button></div><div class="status err"><span class="dot"></span><span>${escapeHtml(err.message)}</span></div>`;
-  }
-}
-function clearAllEnc(){ document.getElementById('results-enc').innerHTML=''; allEncExports.length=0; document.getElementById('batch-card-enc').style.display='none'; document.getElementById('btn-download-all-enc').disabled=true; }
-function downloadAllZipEnc(){
-  if(!allEncExports.length) return; const seen=new Map();
-  const files=allEncExports.map(f=>{ let name=f.name, count=seen.get(name)||0; if(count>0){ const dot=name.lastIndexOf('.'); name = dot>=0? name.slice(0,dot)+'_'+count+name.slice(dot) : name+'_'+count; } seen.set(f.name,count+1); return {name,data:f.data}; });
-  dlBlob(new Blob([buildZip(files)],{type:'application/zip'}), 'png_converted_tex.zip');
 }
 </script>
 </body>
