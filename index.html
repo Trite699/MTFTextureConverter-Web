@@ -102,10 +102,10 @@ h1{font-size:22px;font-weight:500;margin-bottom:4px;}
       <label class="drop" id="drop-zone-dec">
         <div class="drop-icon"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div>
         <span class="drop-label">Click or drop binary .tex file(s)</span>
-        <span class="drop-hint">Supports v9 (Mobile/3DS/Vita), v26 (RE5/DMC4/LP1), v151 (Basara PS3), v157 (RE6/DD/UMVC3), v160 (MHW/RE HD), v162 (MHGU/MHXX/GAAC), v164 (Fighting Collection)</span>
+        <span class="drop-hint">Supports Mobile/3DS/Vita (v8–v15), MT Framework 1.x (v16–v33), and MT Framework 2.x (v151–v164).</span>
         <input type="file" id="file-input-dec" accept=".tex,*" multiple>
       </label>
-      <p class="hint">Includes native in-browser shaders for RGBA8888, RGBA4444, ETC1, DXT1/BC1, and DXT5/BC3. Unsupported console compression blocks (BC4/BC5/BC7/PVRTC/ATC) are extracted as clean raw binary blobs for specialized external processing.</p>
+      <p class="hint">Includes native in-browser shaders for RGBA8888, BGRA8888, RGB888, RGB565, RGBA5551, RGBA4444, L8, A8, LA88, ETC1, DXT1/BC1, DXT3/BC2, and DXT5/BC3. Unsupported console compression blocks (BC4/BC5/BC7/PVRTC/ATC) are extracted as clean raw binary blobs for specialized external processing.</p>
     </div>
 
     <div class="card" id="batch-card-dec" style="display:none">
@@ -126,20 +126,28 @@ h1{font-size:22px;font-weight:500;margin-bottom:4px;}
         <label>
           Target Engine Version:
           <select class="select-fmt" id="global-enc-ver">
-            <option value="9">v9 (0x09) — Mobile / 3DS / Vita / iOS / Android</option>
+            <option value="8">v8 (0x08) — Early Mobile / Handheld / Demo</option>
+            <option value="9" selected>v9 (0x09) — Mobile / 3DS / PS Vita / iOS / Android</option>
+            <option value="10">v10 (0x0A) — MT Framework Mobile / Handheld</option>
+            <option value="16">v16 (0x10) — MT Framework 1.x (Lost Planet, early DMC4)</option>
             <option value="26">v26 (0x1A) — MT Framework 1.x (RE5, DMC4, LP1)</option>
+            <option value="28">v28 (0x1C) — MT Framework 1.x (RE5 Gold, MVC3)</option>
             <option value="151">v151 (0x97) — MT Framework 2.x PS3 (Sengoku Basara)</option>
-            <option value="157" selected>v157 (0x9D) — MT Framework 2.x (RE6, DD:DA, Rev 1/2, UMVC3)</option>
-            <option value="160">v160 (0xA0) — MT Framework 2.x (Monster Hunter World, RE HD)</option>
-            <option value="162">v162 (0xA2) — MT Framework 2.x Switch/PC (MHGU, MHXX, GAAC)</option>
-            <option value="164">v164 (0xA4) — MT Framework 2.x (Capcom Fighting Collection)</option>
+            <option value="157">v157 (0x9D) — RE6, DD:DA, Rev 1/2, UMVC3</option>
+            <option value="160">v160 (0xA0) — Monster Hunter World, RE HD</option>
+            <option value="162">v162 (0xA2) — Switch / PC (MHGU, MHXX, GAAC)</option>
+            <option value="164">v164 (0xA4) — Fighting Collection</option>
           </select>
         </label>
         <label>
           Target Pixel Format:
           <select class="select-fmt" id="global-enc-fmt">
             <option value="1">RGBA8888 (32-bit Uncompressed Lossless)</option>
-            <option value="7">RGBA4444 (16-bit Lightweight)</option>
+            <option value="2">BGRA8888 (32-bit Console/PC Lossless Default)</option>
+            <option value="4">RGB565 (16-bit Color Uncompressed)</option>
+            <option value="7">RGBA4444 (16-bit Lightweight with Alpha)</option>
+            <option value="8">L8 (8-bit Grayscale Luminance)</option>
+            <option value="9">A8 (8-bit Alpha Mask)</option>
             <option value="19">DXT1 / BC1 (8-bit Opaque / 1-bit Alpha Compressed)</option>
             <option value="253" selected>DXT5 / BC3 (8-bit Interpolated Alpha Compressed)</option>
           </select>
@@ -151,7 +159,7 @@ h1{font-size:22px;font-weight:500;margin-bottom:4px;}
         <span class="drop-hint">Will be encoded into the selected MT Framework header version with 1 mipmap level.</span>
         <input type="file" id="file-input-enc" accept="image/png,image/*" multiple>
       </label>
-      <p class="hint">Note: DXT1/BC1 and DXT5/BC3 block compression require image dimensions (width/height) to be multiples of 4. RGBA8888 and RGBA4444 support arbitrary dimensions.</p>
+      <p class="hint">Note: DXT1/BC1 and DXT5/BC3 block compression require image dimensions (width/height) to be multiples of 4. Uncompressed formats (RGBA/BGRA/RGB565) support arbitrary dimensions.</p>
     </div>
 
     <div class="card" id="batch-card-enc" style="display:none">
@@ -212,27 +220,43 @@ function buildZip(files){
 // Universal MT Framework Version & Format Mappings
 // ══════════════════════════════════════════════════════════
 const VERSION_NAMES={
-  0x09:'v9 (Mobile / 3DS / PS Vita / iOS / Android)',
-  0x1A:'v26 (MT Framework 1.x — RE5 / DMC4 / LP1)',
-  0x97:'v151 (MT Framework 2.x — Sengoku Basara PS3)',
-  0x9D:'v157 (MT Framework 2.x — RE6 / Rev1&2 / DD:DA / UMVC3)',
-  0xA0:'v160 (MT Framework 2.x — Monster Hunter World / RE HD)',
-  0xA2:'v162 (MT Framework 2.x — MHGU / MHXX / GAAC / MMXLC)',
-  0xA4:'v164 (MT Framework 2.x — Capcom Fighting Collection)'
+  0x08: 'v8 (0x08) — Early MT Framework / Mobile / Demo',
+  0x09: 'v9 (0x09) — Mobile / 3DS / PS Vita / iOS / Android',
+  0x0A: 'v10 (0x0A) — MT Framework Mobile / Handheld',
+  0x0B: 'v11 (0x0B) — MT Framework Mobile / Handheld',
+  0x0C: 'v12 (0x0C) — MT Framework Handheld',
+  0x10: 'v16 (0x10) — MT Framework 1.x (Lost Planet, early DMC4)',
+  0x12: 'v18 (0x12) — MT Framework 1.x Console/PC',
+  0x13: 'v19 (0x13) — MT Framework 1.x Console/PC',
+  0x1A: 'v26 (0x1A) — MT Framework 1.x (RE5, DMC4, LP1)',
+  0x1C: 'v28 (0x1C) — MT Framework 1.x (RE5 Gold, MVC3)',
+  0x21: 'v33 (0x21) — MT Framework 1.x / Early 2.x',
+  0x97: 'v151 (0x97) — MT Framework 2.x PS3 (Sengoku Basara)',
+  0x9C: 'v156 (0x9C) — MT Framework 2.x Console/PC',
+  0x9D: 'v157 (0x9D) — MT Framework 2.x (RE6, Rev1&2, DD:DA, UMVC3)',
+  0xA0: 'v160 (0xA0) — MT Framework 2.x (Monster Hunter World, RE HD)',
+  0xA2: 'v162 (0xA2) — MT Framework 2.x Switch/PC (MHGU, MHXX, GAAC)',
+  0xA4: 'v164 (0xA4) — MT Framework 2.x (Capcom Fighting Collection)'
 };
 
 const FORMAT_NAMES={
   0x01:'RGBA8888', 0x02:'BGRA8888', 0x03:'RGBA5551', 0x04:'RGB565',
-  0x07:'RGBA4444', 0x08:'L8 (Grayscale)', 0x09:'A8 (Alpha)',
+  0x05:'RGB888 (24-bit)', 0x07:'RGBA4444', 0x08:'L8 (Grayscale)', 0x09:'A8 (Alpha)',
   0x0A:'ETC1', 0x0B:'PVRTC 4bpp', 0x0C:'GPU Container (DXT5/PVRTC/ATC)',
-  0x0D:'PVRTC-A 4bpp', 0x13:'DXT1 / BC1', 0x15:'DXT5 / BC3',
-  0x1C:'RGBA8888', 0x1F:'DXT5 / BC3', 0x20:'BC7 / ASTC',
-  0xFD:'DXT5 / BC3', 0xFE:'PVRTC-A 4bpp', 0xFF:'ATC (Interpolated Alpha)'
+  0x0D:'PVRTC-A 4bpp', 0x0E:'L8A8 (Luminance + Alpha)',
+  0x11:'DXT1 / BC1', 0x12:'DXT3 / BC2', 0x13:'DXT1 / BC1', 0x14:'DXT3 / BC2',
+  0x15:'DXT5 / BC3', 0x16:'BC4 / ATI1 (Grayscale/Height)', 0x17:'BC5 / ATI2 (Normal Map)',
+  0x18:'L8A8 (Luminance + Alpha)', 0x19:'BC7 / ASTC', 0x1A:'ASTC 4x4', 0x1B:'ASTC 5x5',
+  0x1C:'RGBA8888', 0x1D:'BGRA8888', 0x1E:'DXT1 / BC1', 0x1F:'DXT5 / BC3',
+  0x20:'BC7 / ASTC', 0x23:'DXT1 / BC1', 0x24:'DXT5 / BC3', 0x25:'BC7',
+  0xFD:'DXT5 / BC3 (Mobile Container)', 0xFE:'PVRTC-A 4bpp (Mobile Container)', 0xFF:'ATC Interpolated Alpha (Mobile Container)'
 };
 
 const BITDEPTH={
-  0x01:32, 0x02:32, 0x03:16, 0x04:16, 0x07:16, 0x08:8, 0x09:8,
-  0x0A:4, 0x0B:4, 0x0D:4, 0x13:4, 0x15:8, 0x1C:32, 0x1F:8, 0x20:8,
+  0x01:32, 0x02:32, 0x03:16, 0x04:16, 0x05:24, 0x07:16, 0x08:8, 0x09:8,
+  0x0A:4, 0x0B:4, 0x0D:4, 0x0E:16,
+  0x11:4, 0x12:8, 0x13:4, 0x14:8, 0x15:8, 0x16:4, 0x17:8, 0x18:16, 0x19:8, 0x1A:8, 0x1B:8,
+  0x1C:32, 0x1D:32, 0x1E:4, 0x1F:8, 0x20:8, 0x23:4, 0x24:8, 0x25:8,
   0xFD:8, 0xFE:4, 0xFF:8
 };
 
@@ -268,21 +292,21 @@ function parseTexHeader(u8){
   
   let format=0, width=0, height=0, mipCount=1, headerSize=16;
 
-  if(version === 9){
-    // Version 9: MT Framework Mobile (Bitfield header)
-    const b1 = dv.getUint32(4, true);
+  if(version <= 15){
+    // Versions 8–15: Handheld / Mobile Bitfield Layout
+    const b1 = dv.getUint32(4, isLittleEndian);
     format = (b1 >> 16) & 0xFF;
-    const b3 = dv.getUint32(12, true);
+    const b3 = dv.getUint32(12, isLittleEndian);
     width = b3 & 0x1FFF;
     height = (b3 >> 13) & 0x1FFF;
     mipCount = Math.max(1, (b3 >> 26) & 0xF);
     headerSize = 16;
   } else {
-    // Versions 26, 151, 157, 160, 162, 164: Desktop & Console MT Framework
+    // Versions 16–164: Desktop & Console MT Framework
     format = dv.getUint8(6);
     if(format === 0) format = dv.getUint16(6, isLittleEndian);
     
-    // Check standard 16-bit dimension fields (offset 0x08 & 0x0A)
+    // Standard 16-bit dimension fields (offset 0x08 & 0x0A)
     width = dv.getUint16(8, isLittleEndian);
     height = dv.getUint16(10, isLittleEndian);
     
@@ -318,6 +342,49 @@ function decodeRGBA8888(data, width, height){
   out.set(data.subarray(0, Math.min(data.length, out.length)));
   return out;
 }
+function decodeBGRA8888(data, width, height){
+  const out = new Uint8ClampedArray(width * height * 4);
+  const n = Math.min(data.length / 4, width * height);
+  for(let i=0; i<n; i++){
+    const o = i*4;
+    out[o] = data[o+2];   // R
+    out[o+1] = data[o+1]; // G
+    out[o+2] = data[o];   // B
+    out[o+3] = data[o+3]; // A
+  }
+  return out;
+}
+function decodeRGB888(data, width, height){
+  const out = new Uint8ClampedArray(width * height * 4);
+  const n = Math.min(data.length / 3, width * height);
+  for(let i=0; i<n; i++){
+    out[i*4] = data[i*3];
+    out[i*4+1] = data[i*3+1];
+    out[i*4+2] = data[i*3+2];
+    out[i*4+3] = 255;
+  }
+  return out;
+}
+function decodeRGB565(data, width, height){
+  const out = new Uint8ClampedArray(width * height * 4);
+  const n = Math.min(data.length / 2, width * height);
+  for(let i=0; i<n; i++){
+    const word = (data[i*2+1] << 8) | data[i*2];
+    const r = (word >> 11) & 0x1F, g = (word >> 5) & 0x3F, b = word & 0x1F;
+    out[i*4] = (r << 3) | (r >> 2); out[i*4+1] = (g << 2) | (g >> 4); out[i*4+2] = (b << 3) | (b >> 2); out[i*4+3] = 255;
+  }
+  return out;
+}
+function decodeRGBA5551(data, width, height){
+  const out = new Uint8ClampedArray(width * height * 4);
+  const n = Math.min(data.length / 2, width * height);
+  for(let i=0; i<n; i++){
+    const word = (data[i*2+1] << 8) | data[i*2];
+    const r = (word >> 11) & 0x1F, g = (word >> 6) & 0x1F, b = (word >> 1) & 0x1F, a = (word & 1) ? 255 : 0;
+    out[i*4] = (r << 3) | (r >> 2); out[i*4+1] = (g << 3) | (g >> 2); out[i*4+2] = (b << 3) | (b >> 2); out[i*4+3] = a;
+  }
+  return out;
+}
 function decodeRGBA4444(data, width, height){
   const out = new Uint8ClampedArray(width * height * 4);
   const n = width * height;
@@ -328,6 +395,25 @@ function decodeRGBA4444(data, width, height){
   }
   return out;
 }
+function decodeL8(data, width, height){
+  const out = new Uint8ClampedArray(width * height * 4);
+  const n = Math.min(data.length, width * height);
+  for(let i=0; i<n; i++){ const v = data[i]; out[i*4] = v; out[i*4+1] = v; out[i*4+2] = v; out[i*4+3] = 255; }
+  return out;
+}
+function decodeA8(data, width, height){
+  const out = new Uint8ClampedArray(width * height * 4);
+  const n = Math.min(data.length, width * height);
+  for(let i=0; i<n; i++){ const v = data[i]; out[i*4] = 255; out[i*4+1] = 255; out[i*4+2] = 255; out[i*4+3] = v; }
+  return out;
+}
+function decodeLA88(data, width, height){
+  const out = new Uint8ClampedArray(width * height * 4);
+  const n = Math.min(data.length / 2, width * height);
+  for(let i=0; i<n; i++){ const l = data[i*2], a = data[i*2+1]; out[i*4] = l; out[i*4+1] = l; out[i*4+2] = l; out[i*4+3] = a; }
+  return out;
+}
+
 const ETC1_MOD=[[2,8],[5,17],[9,29],[13,42],[18,60],[24,80],[33,106],[47,183]];
 function decodeETC1(data, width, height){
   const out = new Uint8ClampedArray(width * height * 4);
@@ -401,6 +487,38 @@ function decodeDXT1(data, width, height){
   return out;
 }
 
+function decodeDXT3(data, width, height){
+  const out = new Uint8ClampedArray(width * height * 4);
+  const blocksX = Math.ceil(width/4), blocksY = Math.ceil(height/4);
+  let p = 0;
+  for(let by=0; by<blocksY; by++){
+    for(let bx=0; bx<blocksX; bx++){
+      if(p+16 > data.length) break;
+      const alphas = new Uint8Array(16);
+      for(let i=0; i<8; i++){
+        const byte = data[p+i];
+        alphas[i*2] = ((byte & 0xF) * 17); alphas[i*2+1] = (((byte >> 4) & 0xF) * 17);
+      }
+      const c0 = data[p+8]|(data[p+9]<<8), c1 = data[p+10]|(data[p+11]<<8);
+      const r0=((c0>>11)&0x1F)*255/31, g0=((c0>>5)&0x3F)*255/63, b0c=(c0&0x1F)*255/31;
+      const r1=((c1>>11)&0x1F)*255/31, g1=((c1>>5)&0x3F)*255/63, b1c=(c1&0x1F)*255/31;
+      const colors=[[r0,g0,b0c],[r1,g1,b1c],[(2*r0+r1)/3,(2*g0+g1)/3,(2*b0c+b1c)/3],[(r0+2*r1)/3,(g0+2*g1)/3,(b0c+2*b1c)/3]];
+      const idxBits = data[p+12]|(data[p+13]<<8)|(data[p+14]<<16)|(data[p+15]<<24);
+      for(let y=0; y<4; y++){
+        for(let x=0; x<4; x++){
+          const px=bx*4+x, py=by*4+y; if(px>=width||py>=height) continue;
+          const pixIdx=y*4+x, ci=(idxBits>>(2*pixIdx))&3;
+          const [r,g,b] = colors[ci], a = alphas[pixIdx];
+          const o=(py*width+px)*4;
+          out[o]=r; out[o+1]=g; out[o+2]=b; out[o+3]=a;
+        }
+      }
+      p+=16;
+    }
+  }
+  return out;
+}
+
 function decodeDXT5(data, width, height){
   const out = new Uint8ClampedArray(width * height * 4);
   const blocksX = Math.ceil(width/4), blocksY = Math.ceil(height/4);
@@ -441,10 +559,18 @@ function decodeDXT5(data, width, height){
 function decodeSubImage(fmt, bytes, width, height){
   switch(fmt){
     case 0x01: case 0x1C: return decodeRGBA8888(bytes, width, height);
+    case 0x02: case 0x1D: return decodeBGRA8888(bytes, width, height);
+    case 0x03: return decodeRGBA5551(bytes, width, height);
+    case 0x04: return decodeRGB565(bytes, width, height);
+    case 0x05: return decodeRGB888(bytes, width, height);
     case 0x07: return decodeRGBA4444(bytes, width, height);
+    case 0x08: return decodeL8(bytes, width, height);
+    case 0x09: return decodeA8(bytes, width, height);
     case 0x0A: return decodeETC1(bytes, width, height);
-    case 0x13: return decodeDXT1(bytes, width, height);
-    case 0x15: case 0x1F: case 0xFD: return decodeDXT5(bytes, width, height);
+    case 0x0E: case 0x18: return decodeLA88(bytes, width, height);
+    case 0x11: case 0x13: case 0x1E: case 0x23: return decodeDXT1(bytes, width, height);
+    case 0x12: case 0x14: return decodeDXT3(bytes, width, height);
+    case 0x15: case 0x1F: case 0x24: case 0xFD: return decodeDXT5(bytes, width, height);
     default: return null;
   }
 }
@@ -485,6 +611,29 @@ function processTexBuffer(u8){
 // ══════════════════════════════════════════════════════════
 function encodeRGBA8888(rgba){ return new Uint8Array(rgba); }
 
+function encodeBGRA8888(rgba, width, height){
+  const out = new Uint8Array(rgba.length);
+  const n = width * height;
+  for(let i=0; i<n; i++){
+    const o = i*4;
+    out[o] = rgba[o+2];   // B
+    out[o+1] = rgba[o+1]; // G
+    out[o+2] = rgba[o];   // R
+    out[o+3] = rgba[o+3]; // A
+  }
+  return out;
+}
+
+function encodeRGB565(rgba, width, height){
+  const n = width * height; const out = new Uint8Array(n*2);
+  for(let i=0; i<n; i++){
+    const r = rgba[i*4] >> 3, g = rgba[i*4+1] >> 2, b = rgba[i*4+2] >> 3;
+    const word = (r << 11) | (g << 5) | b;
+    out[i*2] = word & 0xFF; out[i*2+1] = word >> 8;
+  }
+  return out;
+}
+
 function encodeRGBA4444(rgba, width, height){
   const n=width*height; const out=new Uint8Array(n*2);
   for(let i=0; i<n; i++){
@@ -492,6 +641,18 @@ function encodeRGBA4444(rgba, width, height){
     const word=(r<<12)|(g<<8)|(b<<4)|a;
     out[i*2]=word>>8; out[i*2+1]=word&0xFF;
   }
+  return out;
+}
+
+function encodeL8(rgba, width, height){
+  const n = width * height; const out = new Uint8Array(n);
+  for(let i=0; i<n; i++) out[i] = Math.round(0.299*rgba[i*4] + 0.587*rgba[i*4+1] + 0.114*rgba[i*4+2]);
+  return out;
+}
+
+function encodeA8(rgba, width, height){
+  const n = width * height; const out = new Uint8Array(n);
+  for(let i=0; i<n; i++) out[i] = rgba[i*4+3];
   return out;
 }
 
@@ -595,10 +756,14 @@ function encodeDXT5(rgba, width, height){
 
 function createTexFile(rgba, width, height, format, targetVersion){
   let payload;
-  if(format===0x01) payload=encodeRGBA8888(rgba);
+  if(format===0x01 || format===0x1C) payload=encodeRGBA8888(rgba);
+  else if(format===0x02 || format===0x1D) payload=encodeBGRA8888(rgba, width, height);
+  else if(format===0x04 || format===0x1B) payload=encodeRGB565(rgba, width, height);
   else if(format===0x07) payload=encodeRGBA4444(rgba, width, height);
-  else if(format===0x13) payload=encodeDXT1(rgba, width, height);
-  else if(format===0xFD || format===0x1F || format===0x15) payload=encodeDXT5(rgba, width, height);
+  else if(format===0x08) payload=encodeL8(rgba, width, height);
+  else if(format===0x09) payload=encodeA8(rgba, width, height);
+  else if(format===0x11 || format===0x13 || format===0x1E || format===0x23) payload=encodeDXT1(rgba, width, height);
+  else if(format===0x15 || format===0x1F || format===0x24 || format===0xFD) payload=encodeDXT5(rgba, width, height);
   else throw new Error('Unsupported encode format selected.');
 
   const hdrSize = 16;
@@ -607,13 +772,13 @@ function createTexFile(rgba, width, height, format, targetVersion){
   
   out[0]=0x54; out[1]=0x45; out[2]=0x58; out[3]=0x20; // "TEX "
   
-  if(targetVersion === 9){
-    // Mobile v9 header bitfield layout
-    dv.setUint32(4, 9 | (format<<16), true);
+  if(targetVersion <= 15){
+    // Mobile / Handheld bitfield layout (v8, v9, v10, v11, etc.)
+    dv.setUint32(4, targetVersion | (format<<16), true);
     dv.setUint32(8, 0, true);
     dv.setUint32(12, (width&0x1FFF) | ((height&0x1FFF)<<13) | (1<<26), true);
   } else {
-    // Standard Desktop / Console v26+ layout
+    // Standard Desktop / Console v16+ layout
     dv.setUint16(4, targetVersion, true);
     dv.setUint8(6, format);
     dv.setUint8(7, 1); // mipCount = 1
@@ -730,7 +895,7 @@ async function loadOneEnc(file){
     const defaultFmt = parseInt(document.getElementById('global-enc-fmt').value, 10);
     const metaRows=[['Dimensions',w+' × '+h],['Total Pixels',String(w*h)],['Input PNG Size',formatBytes(file.size)]];
     let html=`<div class="meta-grid">`+metaRows.map(([l,v])=>`<div class="metric"><div class="metric-label">${l}</div><div class="metric-val">${v}</div></div>`).join('')+`</div>`;
-    html+=`<div class="img-grid" id="${id}-grid"><div class="img-card"><div class="img-canvas-wrap"></div><div class="img-label">Target Version & Format:</div><select class="select-fmt" id="${id}-ver"><option value="9" ${defaultVer===9?'selected':''}>v9 (0x09) — Mobile / 3DS / Vita / Android</option><option value="26" ${defaultVer===26?'selected':''}>v26 (0x1A) — MT Framework 1.x (RE5, DMC4)</option><option value="151" ${defaultVer===151?'selected':''}>v151 (0x97) — MT Framework 2.x PS3</option><option value="157" ${defaultVer===157?'selected':''}>v157 (0x9D) — RE6, DD:DA, Rev 1/2, UMVC3</option><option value="160" ${defaultVer===160?'selected':''}>v160 (0xA0) — Monster Hunter World, RE HD</option><option value="162" ${defaultVer===162?'selected':''}>v162 (0xA2) — Switch / PC (MHGU, GAAC)</option><option value="164" ${defaultVer===164?'selected':''}>v164 (0xA4) — Fighting Collection</option></select><select class="select-fmt" id="${id}-fmt"><option value="1" ${defaultFmt===1?'selected':''}>RGBA8888 (32-bit Lossless)</option><option value="7" ${defaultFmt===7?'selected':''}>RGBA4444 (16-bit Lightweight)</option><option value="19" ${defaultFmt===19?'selected':''}>DXT1 / BC1 (8-bit Opaque Compressed)</option><option value="253" ${defaultFmt===253?'selected':''}>DXT5 / BC3 (8-bit Alpha Compressed)</option></select><div class="img-meta" id="${id}-est"></div><div class="btn-row"><button class="btn btn-primary btn-sm" id="${id}-dl">Download .tex</button></div></div></div>`;
+    html+=`<div class="img-grid" id="${id}-grid"><div class="img-card"><div class="img-canvas-wrap"></div><div class="img-label">Target Version & Format:</div><select class="select-fmt" id="${id}-ver"><option value="8" ${defaultVer===8?'selected':''}>v8 (0x08) — Early Mobile / Handheld</option><option value="9" ${defaultVer===9?'selected':''}>v9 (0x09) — Mobile / 3DS / Vita / Android</option><option value="10" ${defaultVer===10?'selected':''}>v10 (0x0A) — MT Framework Handheld / Mobile</option><option value="16" ${defaultVer===16?'selected':''}>v16 (0x10) — MT Framework 1.x (Lost Planet, early DMC4)</option><option value="26" ${defaultVer===26?'selected':''}>v26 (0x1A) — MT Framework 1.x (RE5, DMC4)</option><option value="28" ${defaultVer===28?'selected':''}>v28 (0x1C) — MT Framework 1.x (RE5 Gold, MVC3)</option><option value="151" ${defaultVer===151?'selected':''}>v151 (0x97) — MT Framework 2.x PS3</option><option value="157" ${defaultVer===157?'selected':''}>v157 (0x9D) — RE6, DD:DA, Rev 1/2, UMVC3</option><option value="160" ${defaultVer===160?'selected':''}>v160 (0xA0) — Monster Hunter World, RE HD</option><option value="162" ${defaultVer===162?'selected':''}>v162 (0xA2) — Switch / PC (MHGU, GAAC)</option><option value="164" ${defaultVer===164?'selected':''}>v164 (0xA4) — Fighting Collection</option></select><select class="select-fmt" id="${id}-fmt"><option value="1" ${defaultFmt===1?'selected':''}>RGBA8888 (32-bit Lossless)</option><option value="2" ${defaultFmt===2?'selected':''}>BGRA8888 (32-bit Console/PC Default Lossless)</option><option value="4" ${defaultFmt===4?'selected':''}>RGB565 (16-bit Color Uncompressed)</option><option value="7" ${defaultFmt===7?'selected':''}>RGBA4444 (16-bit Lightweight with Alpha)</option><option value="8" ${defaultFmt===8?'selected':''}>L8 (8-bit Grayscale Luminance)</option><option value="9" ${defaultFmt===9?'selected':''}>A8 (8-bit Alpha Mask)</option><option value="19" ${defaultFmt===19?'selected':''}>DXT1 / BC1 (8-bit Opaque / 1-bit Alpha Compressed)</option><option value="253" ${defaultFmt===253?'selected':''}>DXT5 / BC3 (8-bit Interpolated Alpha Compressed)</option></select><div class="img-meta" id="${id}-est"></div><div class="btn-row"><button class="btn btn-primary btn-sm" id="${id}-dl">Download .tex</button></div></div></div>`;
     
     card.innerHTML=`<div class="result-head"><span class="result-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span><button class="result-close" onclick="document.getElementById('${id}').remove()">&#10005;</button></div>${html}`;
     card.querySelector('.img-canvas-wrap').appendChild(canvas);
@@ -740,8 +905,9 @@ async function loadOneEnc(file){
     const updateEst=()=>{
       const fmt=parseInt(fmtSelect.value,10);
       let estSize=0;
-      if(fmt===1) estSize=16+(w*h*4);
-      else if(fmt===7) estSize=16+(w*h*2);
+      if(fmt===1 || fmt===2) estSize=16+(w*h*4);
+      else if(fmt===4 || fmt===7) estSize=16+(w*h*2);
+      else if(fmt===8 || fmt===9) estSize=16+(w*h);
       else if(fmt===19) estSize=16+(Math.ceil(w/4)*Math.ceil(h/4)*8);
       else if(fmt===253) estSize=16+(Math.ceil(w/4)*Math.ceil(h/4)*16);
       if((fmt===19||fmt===253) && (w%4!==0 || h%4!==0)){
