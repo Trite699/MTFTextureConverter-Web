@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Universal MT Framework TEX ↔ PNG Studio (Kuriimu2 Edition)</title>
+<title>MT Framework TEX ↔ PNG Converter</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 :root{
@@ -102,7 +102,7 @@ h1{font-size:22px;font-weight:500;margin-bottom:4px;}
       <label class="drop" id="drop-zone-dec">
         <div class="drop-icon"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div>
         <span class="drop-label">Click or drop binary .tex file(s)</span>
-        <span class="drop-hint">Supports Mobile/3DS/Vita (v8–v15), MT Framework 1.x (v16–v33), and MT Framework 2.x (v151–v164).</span>
+        <span class="drop-hint">Supports Mobile/3DS/Vita (v8–v15), MT Framework 1.x (v16–v33), MT Framework 2.x (v151–v164), and bitfield-header Mobile/PC/Switch (TEX\0, v0xA3+).</span>
         <input type="file" id="file-input-dec" accept=".tex,*" multiple>
       </label>
       <p class="hint">Includes native in-browser shaders for RGBA8888, BGRA8888, RGB888, RGB565, RGBA5551, RGBA4444, L8, A8, LA88, ETC1, DXT1/BC1, DXT3/BC2, and DXT5/BC3. Unsupported console compression blocks (BC4/BC5/BC7/PVRTC/ATC) are extracted as clean raw binary blobs for specialized external processing.</p>
@@ -137,6 +137,7 @@ h1{font-size:22px;font-weight:500;margin-bottom:4px;}
             <option value="160">v160 (0xA0) — Monster Hunter World, RE HD</option>
             <option value="162">v162 (0xA2) — Switch / PC (MHGU, MHXX, GAAC)</option>
             <option value="164">v164 (0xA4) — Fighting Collection</option>
+            <option value="9999">v0xA3 (Bitfield) — Mobile/PC/Switch (TEX\0)</option>
           </select>
         </label>
         <label>
@@ -260,6 +261,155 @@ const BITDEPTH={
   0xFD:8, 0xFE:4, 0xFF:8
 };
 
+// ══════════════════════════════════════════════════════════
+// NEW: Bitfield-header variant (magic "TEX\0") — Mobile/PC/Switch
+// Confirmed against Kuriimu2's plugin_mt_framework MtTexHeaderImageData
+// struct ("version 0xA3" family). Verified byte-for-byte against a real
+// 1024x1024 DXT1 sample (chr000_arm_BM_NOMIP.tex).
+// ══════════════════════════════════════════════════════════
+const A3_MAGIC_BYTES=[0x54,0x45,0x58,0x00]; // "TEX\0"
+
+// a3 format code -> pretty label (this table is DISTINCT from the classic
+// FORMAT_NAMES table above, because the numeric codes collide with
+// different meanings between header families)
+const A3_FORMAT_LABELS={
+  0x01:'RGBA4444', 0x02:'RGBA5551', 0x03:'RGBA8888', 0x04:'RGB565',
+  0x05:'A8 (Alpha)', 0x06:'L8 (Grayscale)', 0x07:'L8A8 (Luminance+Alpha)',
+  0x0A:'RG88 (unsupported shader)', 0x0B:'ETC1',
+  0x0C:'GPU Container (DXT5/PVRTC-A/ATC)',
+  0x11:'BGR888 (unsupported shader)',
+  0x13:'DXT1 / BC1', 0x14:'DXT1 / BC1', 0x17:'DXT5 / BC3',
+  0x18:'DXT5 / BC3', 0x19:'DXT1 / BC1', 0x1E:'DXT1 / BC1', 0x1F:'DXT5 / BC3'
+};
+
+// a3 format code -> canonical FORMAT_NAMES/BITDEPTH/decodeSubImage code
+// used elsewhere in this tool, so we can reuse the existing pixel shaders.
+const A3_TO_CANONICAL={
+  0x01:0x07, // RGBA4444
+  0x02:0x03, // RGBA5551
+  0x03:0x01, // RGBA8888
+  0x04:0x04, // RGB565
+  0x05:0x09, // A8
+  0x06:0x08, // L8
+  0x07:0x0E, // LA88
+  0x0B:0x0A, // ETC1
+  0x13:0x11, 0x14:0x11, 0x19:0x11, 0x1E:0x11, // DXT1/BC1
+  0x17:0x15, 0x18:0x15, 0x1F:0x15            // DXT5/BC3
+};
+
+function isA3Magic(u8){
+  return u8.length>=4 && u8[0]===A3_MAGIC_BYTES[0] && u8[1]===A3_MAGIC_BYTES[1] && u8[2]===A3_MAGIC_BYTES[2] && u8[3]===A3_MAGIC_BYTES[3];
+}
+
+function parseA3Header(u8){
+  if(u8.length<16) throw new Error('File is too small to be a bitfield TEX\\0 header (need at least 16 bytes).');
+  const dv=new DataView(u8.buffer,u8.byteOffset,u8.byteLength);
+  const b1=dv.getUint32(4,true), b2=dv.getUint32(8,true), b3=dv.getUint32(12,true);
+
+  const version=b1 & 0xFFF;
+  const swizzle=(b1>>12) & 0xFFF;
+  const reserved1=(b1>>24) & 0xF;
+  const alphaFlags=(b1>>28) & 0xF;
+
+  const mipCount=Math.max(1, b2 & 0x3F);
+  const width=(b2>>6) & 0x1FFF;
+  const height=(b2>>19) & 0x1FFF;
+
+  const imgCount=b3 & 0xFF;
+  const format=(b3>>8) & 0xFF;
+  const unk3=(b3>>16) & 0xFFFF;
+
+  if(width===0 || height===0) throw new Error(`Parsed bitfield TEX\\0 header (version 0x${version.toString(16)}) but dimensions resolved to 0×0. This sub-variant may need a header-size override not yet covered by this tool.`);
+
+  return {magic:'TEX\\0', version, swizzle, reserved1, alphaFlags, mipCount, width, height, imgCount, format, unk3, isA3:true, isLittleEndian:true};
+}
+
+// This header family stores a variable amount of extra data (observed 0, 4,
+// or 8 bytes; likely swizzle-table / platform padding tied to the `swizzle`
+// field) between the 16-byte bitfield header and the actual pixel payload.
+// Rather than guess a single fixed offset, try the offsets we've observed
+// in the wild and pick whichever one makes the payload divide evenly into
+// the expected per-image byte size for the parsed format/dimensions.
+function resolveA3HeaderSize(u8, header){
+  const candidates=[16,20,24,28,32,36,40,44,48];
+  if(header.format===0x0C){
+    // GPU-dependent container: needs 16(header) + 24(offset/size table) minimum
+    for(const hs of candidates){ if(hs>=16 && u8.length>hs+24) return hs; }
+    return 16;
+  }
+  const canon=A3_TO_CANONICAL[header.format];
+  const bd=canon!==undefined ? BITDEPTH[canon] : undefined;
+  if(!bd) return 16;
+  let perImage=0;
+  for(let i=0;i<header.mipCount;i++){
+    perImage+=Math.max(1,header.width>>i)*Math.max(1,header.height>>i)*bd/8;
+  }
+  if(perImage<=0) return 16;
+  // 1) exact single-image fit
+  for(const hs of candidates){ if(hs+perImage===u8.length) return hs; }
+  // 2) remaining payload is a whole multiple of one image (multiple stored images)
+  for(const hs of candidates){
+    const rem=u8.length-hs;
+    if(rem>0 && rem % perImage === 0) return hs;
+  }
+  // 3) fallback: closest without going negative
+  for(const hs of candidates){ if(hs+perImage<=u8.length) return hs; }
+  return 16;
+}
+
+function processTexBufferA3(u8){
+  const header=parseA3Header(u8);
+  const dv=new DataView(u8.buffer,u8.byteOffset,u8.byteLength);
+  const headerSize=resolveA3HeaderSize(u8, header);
+  header.headerSize=headerSize;
+  const isGpu=header.format===0x0C;
+  const images=[];
+
+  if(isGpu){
+    if(u8.length<headerSize+24) throw new Error('File too short for GPU-dependent container offset/size table.');
+    const offsets=[dv.getUint32(headerSize,true),dv.getUint32(headerSize+4,true),dv.getUint32(headerSize+8,true)];
+    const sizes=[dv.getUint32(headerSize+12,true),dv.getUint32(headerSize+16,true),dv.getUint32(headerSize+20,true)];
+    const formats=[0xFD,0xFE,0xFF]; // DXT5, PVRTC-A, ATC — same convention as the classic mobile GPU container
+    for(let i=0;i<3;i++){
+      if(offsets[i]===undefined || offsets[i]===0xFFFFFFFF) continue;
+      if(i>0 && offsets[i]===offsets[0]) continue;
+      const bd=BITDEPTH[formats[i]];
+      let size=sizes[i];
+      if(!size || size===0xFFFFFFFF) size=bd?Math.ceil(header.width*header.height*bd/8):0;
+      if(!size || offsets[i]>=u8.length) continue;
+      if(offsets[i]+size>u8.length) size=u8.length-offsets[i];
+      const raw=u8.slice(offsets[i],offsets[i]+size);
+      images.push({format:formats[i],width:header.width,height:header.height,raw,rgba:decodeSubImage(formats[i],raw,header.width,header.height)});
+    }
+    if(images.length===0){
+      // Offset table looked unreadable — fall back to treating the rest of
+      // the file as raw DXT5, the most common of the three GPU variants.
+      const bd=BITDEPTH[0x15];
+      const size=Math.min(u8.length-headerSize, Math.ceil(header.width*header.height*bd/8));
+      const raw=u8.slice(headerSize,headerSize+size);
+      images.push({format:0x15,width:header.width,height:header.height,raw,rgba:decodeSubImage(0x15,raw,header.width,header.height)});
+    }
+  } else {
+    const canon=A3_TO_CANONICAL[header.format];
+    if(canon===undefined){
+      throw new Error(`Bitfield TEX\\0 header uses format code 0x${header.format.toString(16).toUpperCase()} (${A3_FORMAT_LABELS[header.format]||'unknown'}), which has no in-browser shader yet. Extracting as raw binary would require a confirmed header size for this format — please report this format code.`);
+    }
+    const bd=BITDEPTH[canon];
+    const perImage=Math.ceil(header.width*header.height*bd/8);
+    const totalAvail=u8.length-headerSize;
+    const count=Math.max(1, Math.min(header.imgCount||1, Math.round(totalAvail/perImage)) || 1);
+    let off=headerSize;
+    for(let i=0;i<count;i++){
+      if(off+perImage>u8.length) break;
+      const raw=u8.slice(off,off+perImage);
+      images.push({format:canon,width:header.width,height:header.height,raw,rgba:decodeSubImage(canon,raw,header.width,header.height),subLabel:count>1?`Image ${i+1}/${count}`:undefined});
+      off+=perImage;
+    }
+  }
+  if(images.length===0) throw new Error('No valid image sub-data could be located in bitfield TEX\\0 file.');
+  return {header, isGpu, images};
+}
+
 function clamp8(v){ return v<0?0:v>255?255:v; }
 function formatBytes(b){ if(b<1024) return b+' B'; if(b<1048576) return (b/1024).toFixed(1)+' KB'; return (b/1048576).toFixed(2)+' MB'; }
 function escapeHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -277,7 +427,7 @@ function parseTexHeader(u8){
   const magic=String.fromCharCode(u8[0],u8[1],u8[2],u8[3]);
   
   // Binary Integrity Shield
-  if(magic!=='TEX ' && magic!==' XET'){
+  if(magic!=='TEX ' && magic!==' XET' && !isA3Magic(u8)){
     const asStr = new TextDecoder("utf-8", {fatal: false}).decode(u8.slice(0, 16));
     if(asStr.includes("TEX") || u8[0]===0x54 && u8[1]===0x45 && u8[2]===0x58){
       throw new Error('CORRUPTED FILE DETECTED: The "TEX" header is present, but binary byte integrity was destroyed (likely saved via text editor/paste). Please use original binary .tex game files.');
@@ -576,6 +726,8 @@ function decodeSubImage(fmt, bytes, width, height){
 }
 
 function processTexBuffer(u8){
+  if(isA3Magic(u8)) return processTexBufferA3(u8);
+
   const header = parseTexHeader(u8);
   const isGpu = detectGpuDependent(header, u8.length);
   const images = [];
@@ -755,6 +907,11 @@ function encodeDXT5(rgba, width, height){
 }
 
 function createTexFile(rgba, width, height, format, targetVersion){
+  // Bitfield "TEX\0" header target (Mobile/PC/Switch v0xA3 family)
+  if(targetVersion===9999){
+    return createTexFileA3(rgba, width, height, format);
+  }
+
   let payload;
   if(format===0x01 || format===0x1C) payload=encodeRGBA8888(rgba);
   else if(format===0x02 || format===0x1D) payload=encodeBGRA8888(rgba, width, height);
@@ -786,6 +943,50 @@ function createTexFile(rgba, width, height, format, targetVersion){
     dv.setUint16(10, height, true);
     dv.setUint32(12, 0, true);
   }
+  out.set(payload, hdrSize);
+  return out;
+}
+
+// Canonical FORMAT_NAMES/BITDEPTH code -> a3 format code (inverse of A3_TO_CANONICAL,
+// picking the most common/representative a3 code per canonical format)
+const CANONICAL_TO_A3={0x01:0x03, 0x02:0x03 /*no BGRA in a3, fall back to RGBA*/, 0x04:0x04, 0x07:0x01, 0x08:0x06, 0x09:0x05, 0x11:0x13, 0x15:0x17};
+
+function createTexFileA3(rgba, width, height, canonicalFormat){
+  const a3fmt = CANONICAL_TO_A3[canonicalFormat];
+  if(a3fmt===undefined) throw new Error('This pixel format is not supported for the bitfield TEX\\0 (Mobile/PC/Switch) target yet.');
+
+  let payload;
+  if(a3fmt===0x03) payload=encodeRGBA8888(rgba);
+  else if(a3fmt===0x04) payload=encodeRGB565(rgba, width, height);
+  else if(a3fmt===0x01) payload=encodeRGBA4444(rgba, width, height);
+  else if(a3fmt===0x06) payload=encodeL8(rgba, width, height);
+  else if(a3fmt===0x05) payload=encodeA8(rgba, width, height);
+  else if(a3fmt===0x13) payload=encodeDXT1(rgba, width, height);
+  else if(a3fmt===0x17) payload=encodeDXT5(rgba, width, height);
+  else throw new Error('Unsupported encode format selected for bitfield TEX\\0 target.');
+
+  // NOTE: we write the confirmed minimal 16-byte header with no trailing
+  // swizzle/padding bytes (swizzle=0). Real game files from some sub-versions
+  // carry 4-8 extra bytes after the header (purpose not fully confirmed) —
+  // if a repacked file doesn't load in-engine, that padding is the first
+  // thing to investigate.
+  const hdrSize=16;
+  const out=new Uint8Array(hdrSize+payload.length);
+  const dv=new DataView(out.buffer);
+  out[0]=0x54; out[1]=0x45; out[2]=0x58; out[3]=0x00; // "TEX\0"
+
+  const version=0xA3, swizzle=0, reserved1=0, alphaFlags=0;
+  const b1=(version&0xFFF) | ((swizzle&0xFFF)<<12) | ((reserved1&0xF)<<24) | ((alphaFlags&0xF)<<28);
+  dv.setUint32(4, b1>>>0, true);
+
+  const mipCount=1;
+  const b2=(mipCount&0x3F) | ((width&0x1FFF)<<6) | ((height&0x1FFF)<<19);
+  dv.setUint32(8, b2>>>0, true);
+
+  const imgCount=1, unk3=1;
+  const b3=(imgCount&0xFF) | ((a3fmt&0xFF)<<8) | ((unk3&0xFFFF)<<16);
+  dv.setUint32(12, b3>>>0, true);
+
   out.set(payload, hdrSize);
   return out;
 }
@@ -822,13 +1023,23 @@ async function loadOneDec(file){
   try{
     const u8=new Uint8Array(await readArrayBuffer(file));
     const {header,isGpu,images}=processTexBuffer(u8);
-    
-    const verStr = VERSION_NAMES[header.version] || (`v${header.version} (0x${header.version.toString(16).toUpperCase().padStart(2,'0')})`);
+
+    let verStr, fmtLabel, headerLayoutLabel;
+    if(header.isA3){
+      verStr = `v0x${header.version.toString(16).toUpperCase()} (Bitfield Header) — Mobile/PC/Switch`;
+      fmtLabel = '0x'+header.format.toString(16).toUpperCase().padStart(2,'0')+' — '+(A3_FORMAT_LABELS[header.format]||'Unknown');
+      headerLayoutLabel = `Bitfield (magic TEX\\0, ${header.headerSize}-byte header, swizzle=${header.swizzle})`;
+    } else {
+      verStr = VERSION_NAMES[header.version] || (`v${header.version} (0x${header.version.toString(16).toUpperCase().padStart(2,'0')})`);
+      fmtLabel = '0x'+header.format.toString(16).toUpperCase().padStart(2,'0')+' — '+(FORMAT_NAMES[header.format]||'Unknown');
+      headerLayoutLabel = !header.isLittleEndian ? 'Big-Endian Console' : (isGpu ? 'GPU Container Table' : 'Standard Direct');
+    }
+
     const metaRows=[
       ['Dimensions', header.width+' × '+header.height],
       ['Engine Version', verStr],
-      ['Format Code', '0x'+header.format.toString(16).toUpperCase().padStart(2,'0')+' — '+(FORMAT_NAMES[header.format]||'Unknown')],
-      ['Header Layout', !header.isLittleEndian ? 'Big-Endian Console' : (isGpu ? 'GPU Container Table' : 'Standard Direct')],
+      ['Format Code', fmtLabel],
+      ['Header Layout', headerLayoutLabel],
       ['Mip Levels', String(header.mipCount)+' (base level shown)'],
       ['File Size', formatBytes(u8.length)]
     ];
@@ -836,7 +1047,7 @@ async function loadOneDec(file){
     card.innerHTML=`<div class="result-head"><span class="result-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span><button class="result-close" onclick="document.getElementById('${id}').remove()">&#10005;</button></div>${html}`;
     const grid=document.getElementById(id+'-grid');
     for(const img of images){
-      const label=(FORMAT_NAMES[img.format]||('0x'+img.format.toString(16))), outName=baseName(file.name)+(images.length>1?'_'+slug(label):'')+'.png';
+      const label=(img.subLabel? img.subLabel+' — ':'')+(FORMAT_NAMES[img.format]||('0x'+img.format.toString(16))), outName=baseName(file.name)+(images.length>1?'_'+slug(label):'')+'.png';
       if(img.rgba){
         const canvas=document.createElement('canvas'); canvas.width=img.width; canvas.height=img.height;
         canvas.getContext('2d').putImageData(new ImageData(img.rgba,img.width,img.height),0,0);
@@ -895,15 +1106,17 @@ async function loadOneEnc(file){
     const defaultFmt = parseInt(document.getElementById('global-enc-fmt').value, 10);
     const metaRows=[['Dimensions',w+' × '+h],['Total Pixels',String(w*h)],['Input PNG Size',formatBytes(file.size)]];
     let html=`<div class="meta-grid">`+metaRows.map(([l,v])=>`<div class="metric"><div class="metric-label">${l}</div><div class="metric-val">${v}</div></div>`).join('')+`</div>`;
-    html+=`<div class="img-grid" id="${id}-grid"><div class="img-card"><div class="img-canvas-wrap"></div><div class="img-label">Target Version & Format:</div><select class="select-fmt" id="${id}-ver"><option value="8" ${defaultVer===8?'selected':''}>v8 (0x08) — Early Mobile / Handheld</option><option value="9" ${defaultVer===9?'selected':''}>v9 (0x09) — Mobile / 3DS / Vita / Android</option><option value="10" ${defaultVer===10?'selected':''}>v10 (0x0A) — MT Framework Handheld / Mobile</option><option value="16" ${defaultVer===16?'selected':''}>v16 (0x10) — MT Framework 1.x (Lost Planet, early DMC4)</option><option value="26" ${defaultVer===26?'selected':''}>v26 (0x1A) — MT Framework 1.x (RE5, DMC4)</option><option value="28" ${defaultVer===28?'selected':''}>v28 (0x1C) — MT Framework 1.x (RE5 Gold, MVC3)</option><option value="151" ${defaultVer===151?'selected':''}>v151 (0x97) — MT Framework 2.x PS3</option><option value="157" ${defaultVer===157?'selected':''}>v157 (0x9D) — RE6, DD:DA, Rev 1/2, UMVC3</option><option value="160" ${defaultVer===160?'selected':''}>v160 (0xA0) — Monster Hunter World, RE HD</option><option value="162" ${defaultVer===162?'selected':''}>v162 (0xA2) — Switch / PC (MHGU, GAAC)</option><option value="164" ${defaultVer===164?'selected':''}>v164 (0xA4) — Fighting Collection</option></select><select class="select-fmt" id="${id}-fmt"><option value="1" ${defaultFmt===1?'selected':''}>RGBA8888 (32-bit Lossless)</option><option value="2" ${defaultFmt===2?'selected':''}>BGRA8888 (32-bit Console/PC Default Lossless)</option><option value="4" ${defaultFmt===4?'selected':''}>RGB565 (16-bit Color Uncompressed)</option><option value="7" ${defaultFmt===7?'selected':''}>RGBA4444 (16-bit Lightweight with Alpha)</option><option value="8" ${defaultFmt===8?'selected':''}>L8 (8-bit Grayscale Luminance)</option><option value="9" ${defaultFmt===9?'selected':''}>A8 (8-bit Alpha Mask)</option><option value="19" ${defaultFmt===19?'selected':''}>DXT1 / BC1 (8-bit Opaque / 1-bit Alpha Compressed)</option><option value="253" ${defaultFmt===253?'selected':''}>DXT5 / BC3 (8-bit Interpolated Alpha Compressed)</option></select><div class="img-meta" id="${id}-est"></div><div class="btn-row"><button class="btn btn-primary btn-sm" id="${id}-dl">Download .tex</button></div></div></div>`;
+    html+=`<div class="img-grid" id="${id}-grid"><div class="img-card"><div class="img-canvas-wrap"></div><div class="img-label">Target Version & Format:</div><select class="select-fmt" id="${id}-ver"><option value="8" ${defaultVer===8?'selected':''}>v8 (0x08) — Early Mobile / Handheld</option><option value="9" ${defaultVer===9?'selected':''}>v9 (0x09) — Mobile / 3DS / Vita / Android</option><option value="10" ${defaultVer===10?'selected':''}>v10 (0x0A) — MT Framework Handheld / Mobile</option><option value="16" ${defaultVer===16?'selected':''}>v16 (0x10) — MT Framework 1.x (Lost Planet, early DMC4)</option><option value="26" ${defaultVer===26?'selected':''}>v26 (0x1A) — MT Framework 1.x (RE5, DMC4)</option><option value="28" ${defaultVer===28?'selected':''}>v28 (0x1C) — MT Framework 1.x (RE5 Gold, MVC3)</option><option value="151" ${defaultVer===151?'selected':''}>v151 (0x97) — MT Framework 2.x PS3</option><option value="157" ${defaultVer===157?'selected':''}>v157 (0x9D) — RE6, DD:DA, Rev 1/2, UMVC3</option><option value="160" ${defaultVer===160?'selected':''}>v160 (0xA0) — Monster Hunter World, RE HD</option><option value="162" ${defaultVer===162?'selected':''}>v162 (0xA2) — Switch / PC (MHGU, GAAC)</option><option value="164" ${defaultVer===164?'selected':''}>v164 (0xA4) — Fighting Collection</option><option value="9999" ${defaultVer===9999?'selected':''}>v0xA3 (Bitfield) — Mobile/PC/Switch (TEX\\0)</option></select><select class="select-fmt" id="${id}-fmt"><option value="1" ${defaultFmt===1?'selected':''}>RGBA8888 (32-bit Lossless)</option><option value="2" ${defaultFmt===2?'selected':''}>BGRA8888 (32-bit Console/PC Default Lossless)</option><option value="4" ${defaultFmt===4?'selected':''}>RGB565 (16-bit Color Uncompressed)</option><option value="7" ${defaultFmt===7?'selected':''}>RGBA4444 (16-bit Lightweight with Alpha)</option><option value="8" ${defaultFmt===8?'selected':''}>L8 (8-bit Grayscale Luminance)</option><option value="9" ${defaultFmt===9?'selected':''}>A8 (8-bit Alpha Mask)</option><option value="19" ${defaultFmt===19?'selected':''}>DXT1 / BC1 (8-bit Opaque / 1-bit Alpha Compressed)</option><option value="253" ${defaultFmt===253?'selected':''}>DXT5 / BC3 (8-bit Interpolated Alpha Compressed)</option></select><div class="img-meta" id="${id}-est"></div><div class="btn-row"><button class="btn btn-primary btn-sm" id="${id}-dl">Download .tex</button></div></div></div>`;
     
     card.innerHTML=`<div class="result-head"><span class="result-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span><button class="result-close" onclick="document.getElementById('${id}').remove()">&#10005;</button></div>${html}`;
     card.querySelector('.img-canvas-wrap').appendChild(canvas);
 
     const verSelect=document.getElementById(`${id}-ver`), fmtSelect=document.getElementById(`${id}-fmt`), estLabel=document.getElementById(`${id}-est`), dlBtn=document.getElementById(`${id}-dl`);
     
+    const FMT_TO_CANON={1:0x01,2:0x02,4:0x04,7:0x07,8:0x08,9:0x09,19:0x11,253:0x15};
     const updateEst=()=>{
       const fmt=parseInt(fmtSelect.value,10);
+      const ver=parseInt(verSelect.value,10);
       let estSize=0;
       if(fmt===1 || fmt===2) estSize=16+(w*h*4);
       else if(fmt===4 || fmt===7) estSize=16+(w*h*2);
@@ -912,15 +1125,18 @@ async function loadOneEnc(file){
       else if(fmt===253) estSize=16+(Math.ceil(w/4)*Math.ceil(h/4)*16);
       if((fmt===19||fmt===253) && (w%4!==0 || h%4!==0)){
         estLabel.style.color='var(--text-danger)'; estLabel.textContent=`Warning: ${w}×${h} not multiple of 4! DXT block compression will artifact.`;
+      } else if(ver===9999 && (fmt===2)){
+        estLabel.style.color='var(--text-danger)'; estLabel.textContent=`BGRA8888 has no direct equivalent in the bitfield TEX\\0 format — will fall back to RGBA8888.`;
       } else {
-        estLabel.style.color='var(--text-tertiary)'; estLabel.textContent=`Output: ~${formatBytes(estSize)} · 1 Mipmap`;
+        estLabel.style.color='var(--text-tertiary)'; estLabel.textContent=`Output: ~${formatBytes(estSize)} · 1 Mipmap${ver===9999?' · bitfield header':''}`;
       }
     };
     verSelect.addEventListener('change', updateEst); fmtSelect.addEventListener('change', updateEst); updateEst();
 
     const doEncode=()=>{
       const ver=parseInt(verSelect.value,10), fmt=parseInt(fmtSelect.value,10);
-      return createTexFile(rgba, w, h, fmt, ver);
+      const canon = FMT_TO_CANON[fmt] !== undefined ? FMT_TO_CANON[fmt] : fmt;
+      return createTexFile(rgba, w, h, canon, ver);
     };
 
     const outName=baseName(file.name)+'.tex';
@@ -941,6 +1157,7 @@ function downloadAllZipEnc(){
   const files=allEncExports.map(f=>{ let name=f.name, count=seen.get(name)||0; if(count>0){ const dot=name.lastIndexOf('.'); name = dot>=0? name.slice(0,dot)+'_'+count+name.slice(dot) : name+'_'+count; } seen.set(f.name,count+1); return {name,data:f.data}; });
   dlBlob(new Blob([buildZip(files)],{type:'application/zip'}), 'png_converted_mt_tex.zip');
 }
+
 </script>
 </body>
 </html>
