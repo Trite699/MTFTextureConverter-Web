@@ -105,7 +105,7 @@ h1{font-size:22px;font-weight:500;margin-bottom:4px;}
         <span class="drop-hint">Supports Mobile/3DS/Vita (v8–v15), MT Framework 1.x (v16–v33), MT Framework 2.x (v151–v164), and bitfield-header Mobile/PC/Switch (TEX\0, v0xA3+).</span>
         <input type="file" id="file-input-dec" accept=".tex,*" multiple>
       </label>
-      <p class="hint">Includes native in-browser shaders for RGBA8888, BGRA8888, RGB888, RGB565, RGBA5551, RGBA4444, L8, A8, LA88, ETC1, DXT1/BC1, DXT3/BC2, and DXT5/BC3. Unsupported console compression blocks (BC4/BC5/BC7/PVRTC/ATC) are extracted as clean raw binary blobs for specialized external processing.</p>
+      <p class="hint">Includes native in-browser shaders for RGBA8888, BGRA8888, RGB888, BGR888, RGB565, RGBA5551, RGBA4444, L8, A8, LA88, ETC1, DXT1/BC1, DXT3/BC2, and DXT5/BC3. Unsupported console compression blocks (BC4/BC5/BC7/PVRTC/ATC) are extracted as clean raw binary blobs for specialized external processing.</p>
     </div>
 
     <div class="card" id="batch-card-dec" style="display:none">
@@ -242,7 +242,7 @@ const VERSION_NAMES={
 
 const FORMAT_NAMES={
   0x01:'RGBA8888', 0x02:'BGRA8888', 0x03:'RGBA5551', 0x04:'RGB565',
-  0x05:'RGB888 (24-bit)', 0x07:'RGBA4444', 0x08:'L8 (Grayscale)', 0x09:'A8 (Alpha)',
+  0x05:'RGB888 (24-bit)', 0x06:'BGR888 (24-bit)', 0x07:'RGBA4444', 0x08:'L8 (Grayscale)', 0x09:'A8 (Alpha)',
   0x0A:'ETC1', 0x0B:'PVRTC 4bpp', 0x0C:'GPU Container (DXT5/PVRTC/ATC)',
   0x0D:'PVRTC-A 4bpp', 0x0E:'L8A8 (Luminance + Alpha)',
   0x11:'DXT1 / BC1', 0x12:'DXT3 / BC2', 0x13:'DXT1 / BC1', 0x14:'DXT3 / BC2',
@@ -254,7 +254,7 @@ const FORMAT_NAMES={
 };
 
 const BITDEPTH={
-  0x01:32, 0x02:32, 0x03:16, 0x04:16, 0x05:24, 0x07:16, 0x08:8, 0x09:8,
+  0x01:32, 0x02:32, 0x03:16, 0x04:16, 0x05:24, 0x06:24, 0x07:16, 0x08:8, 0x09:8,
   0x0A:4, 0x0B:4, 0x0D:4, 0x0E:16,
   0x11:4, 0x12:8, 0x13:4, 0x14:8, 0x15:8, 0x16:4, 0x17:8, 0x18:16, 0x19:8, 0x1A:8, 0x1B:8,
   0x1C:32, 0x1D:32, 0x1E:4, 0x1F:8, 0x20:8, 0x23:4, 0x24:8, 0x25:8,
@@ -277,7 +277,7 @@ const A3_FORMAT_LABELS={
   0x05:'A8 (Alpha)', 0x06:'L8 (Grayscale)', 0x07:'L8A8 (Luminance+Alpha)',
   0x0A:'RG88 (unsupported shader)', 0x0B:'ETC1',
   0x0C:'GPU Container (DXT5/PVRTC-A/ATC)',
-  0x11:'BGR888 (unsupported shader)',
+  0x11:'BGR888',
   0x13:'DXT1 / BC1', 0x14:'DXT1 / BC1', 0x17:'DXT5 / BC3',
   0x18:'DXT5 / BC3', 0x19:'DXT1 / BC1', 0x1E:'DXT1 / BC1', 0x1F:'DXT5 / BC3'
 };
@@ -293,6 +293,7 @@ const A3_TO_CANONICAL={
   0x06:0x08, // L8
   0x07:0x0E, // LA88
   0x0B:0x0A, // ETC1
+  0x11:0x06, // BGR888
   0x13:0x11, 0x14:0x11, 0x19:0x11, 0x1E:0x11, // DXT1/BC1
   0x17:0x15, 0x18:0x15, 0x1F:0x15            // DXT5/BC3
 };
@@ -366,28 +367,66 @@ function processTexBufferA3(u8){
   const images=[];
 
   if(isGpu){
-    if(u8.length<headerSize+24) throw new Error('File too short for GPU-dependent container offset/size table.');
-    const offsets=[dv.getUint32(headerSize,true),dv.getUint32(headerSize+4,true),dv.getUint32(headerSize+8,true)];
-    const sizes=[dv.getUint32(headerSize+12,true),dv.getUint32(headerSize+16,true),dv.getUint32(headerSize+20,true)];
-    const formats=[0xFD,0xFE,0xFF]; // DXT5, PVRTC-A, ATC — same convention as the classic mobile GPU container
-    for(let i=0;i<3;i++){
-      if(offsets[i]===undefined || offsets[i]===0xFFFFFFFF) continue;
-      if(i>0 && offsets[i]===offsets[0]) continue;
-      const bd=BITDEPTH[formats[i]];
-      let size=sizes[i];
-      if(!size || size===0xFFFFFFFF) size=bd?Math.ceil(header.width*header.height*bd/8):0;
-      if(!size || offsets[i]>=u8.length) continue;
-      if(offsets[i]+size>u8.length) size=u8.length-offsets[i];
-      const raw=u8.slice(offsets[i],offsets[i]+size);
-      images.push({format:formats[i],width:header.width,height:header.height,raw,rgba:decodeSubImage(formats[i],raw,header.width,header.height)});
+    // The GPU-dependent container has TWO sub-variants seen in the wild:
+    //  (a) a real 24-byte offset/size table for up to 3 platform-specific
+    //      compressed formats (DXT5 / PVRTC-A / ATC), used by some mobile
+    //      builds, OR
+    //  (b) a single compressed image (almost always DXT5) sitting directly
+    //      after the 16-byte header, with NO table at all — seen on PC/
+    //      Switch-era files.
+    // A genuine table entry must either be the "unused" sentinel
+    // (0xFFFFFFFF) or a byte offset that lands *after* the table itself
+    // (headerSize + 24) and inside the file. If none of the entries
+    // satisfy that, what we're reading as "offsets" is actually the start
+    // of the pixel payload, and we must fall back to variant (b).
+    const tableOk = u8.length>=headerSize+24;
+    let offsets=[], sizes=[], tableValid=false;
+    if(tableOk){
+      offsets=[dv.getUint32(headerSize,true),dv.getUint32(headerSize+4,true),dv.getUint32(headerSize+8,true)];
+      sizes=[dv.getUint32(headerSize+12,true),dv.getUint32(headerSize+16,true),dv.getUint32(headerSize+20,true)];
+      const minValidOffset=headerSize+24;
+      const usable=offsets.filter(o=>o!==0xFFFFFFFF);
+      tableValid = usable.length>0 && usable.every(o=>o>=minValidOffset && o<u8.length);
     }
+
+    if(tableValid){
+      const formats=[0xFD,0xFE,0xFF]; // DXT5, PVRTC-A, ATC — same convention as the classic mobile GPU container
+      for(let i=0;i<3;i++){
+        if(offsets[i]===undefined || offsets[i]===0xFFFFFFFF) continue;
+        if(i>0 && offsets[i]===offsets[0]) continue;
+        const bd=BITDEPTH[formats[i]];
+        let size=sizes[i];
+        if(!size || size===0xFFFFFFFF) size=bd?Math.ceil(header.width*header.height*bd/8):0;
+        if(!size || offsets[i]>=u8.length) continue;
+        if(offsets[i]+size>u8.length) size=u8.length-offsets[i];
+        const raw=u8.slice(offsets[i],offsets[i]+size);
+        images.push({format:formats[i],width:header.width,height:header.height,raw,rgba:decodeSubImage(formats[i],raw,header.width,header.height)});
+      }
+    }
+
     if(images.length===0){
-      // Offset table looked unreadable — fall back to treating the rest of
-      // the file as raw DXT5, the most common of the three GPU variants.
-      const bd=BITDEPTH[0x15];
-      const size=Math.min(u8.length-headerSize, Math.ceil(header.width*header.height*bd/8));
-      const raw=u8.slice(headerSize,headerSize+size);
-      images.push({format:0x15,width:header.width,height:header.height,raw,rgba:decodeSubImage(0x15,raw,header.width,header.height)});
+      // No real offset table — the compressed payload sits directly after
+      // the header. Try the known GPU-container sub-formats in likelihood
+      // order and pick whichever one's expected byte size best matches
+      // what's actually available (allowing a little slack for trailing
+      // padding/footer bytes some tools append).
+      const available=u8.length-headerSize;
+      const candidates=[0xFD /*DXT5*/, 0xFF /*ATC*/, 0xFE /*PVRTC-A*/];
+      let best=null;
+      for(const fmt of candidates){
+        const bd=BITDEPTH[fmt];
+        const expected=Math.ceil(header.width*header.height*bd/8);
+        if(expected<=available){
+          const slack=available-expected;
+          if(best===null || slack<best.slack){ best={fmt,expected,slack}; }
+        }
+      }
+      // Prefer an exact-ish match (small slack); otherwise still fall back
+      // to DXT5 clamped to what's available so we produce *something*
+      // rather than silently failing.
+      const chosen = (best && best.slack<=64) ? best : {fmt:0xFD, expected:Math.min(available,Math.ceil(header.width*header.height*BITDEPTH[0xFD]/8)), slack:0};
+      const raw=u8.slice(headerSize, headerSize+Math.min(chosen.expected,available));
+      images.push({format:chosen.fmt,width:header.width,height:header.height,raw,rgba:decodeSubImage(chosen.fmt,raw,header.width,header.height)});
     }
   } else {
     const canon=A3_TO_CANONICAL[header.format];
@@ -511,6 +550,17 @@ function decodeRGB888(data, width, height){
     out[i*4] = data[i*3];
     out[i*4+1] = data[i*3+1];
     out[i*4+2] = data[i*3+2];
+    out[i*4+3] = 255;
+  }
+  return out;
+}
+function decodeBGR888(data, width, height){
+  const out = new Uint8ClampedArray(width * height * 4);
+  const n = Math.min(data.length / 3, width * height);
+  for(let i=0; i<n; i++){
+    out[i*4] = data[i*3+2];   // R (from B,G,R byte order)
+    out[i*4+1] = data[i*3+1]; // G
+    out[i*4+2] = data[i*3];   // B
     out[i*4+3] = 255;
   }
   return out;
@@ -713,6 +763,7 @@ function decodeSubImage(fmt, bytes, width, height){
     case 0x03: return decodeRGBA5551(bytes, width, height);
     case 0x04: return decodeRGB565(bytes, width, height);
     case 0x05: return decodeRGB888(bytes, width, height);
+    case 0x06: return decodeBGR888(bytes, width, height);
     case 0x07: return decodeRGBA4444(bytes, width, height);
     case 0x08: return decodeL8(bytes, width, height);
     case 0x09: return decodeA8(bytes, width, height);
@@ -738,15 +789,40 @@ function processTexBuffer(u8){
     if(u8.length < tblOff + 24) throw new Error('File too short for GPU container offset table.');
     const offsets = [dv.getUint32(tblOff, header.isLittleEndian), dv.getUint32(tblOff+4, header.isLittleEndian), dv.getUint32(tblOff+8, header.isLittleEndian)];
     const sizes = [dv.getUint32(tblOff+12, header.isLittleEndian), dv.getUint32(tblOff+16, header.isLittleEndian), dv.getUint32(tblOff+20, header.isLittleEndian)];
+    const minValidOffset = tblOff + 24;
+    const usableOffsets = offsets.filter(o=>o!==0xFFFFFFFF);
+    const tableValid = usableOffsets.length>0 && usableOffsets.every(o=>o>=minValidOffset && o<u8.length);
     const formats = header.format===0x0C ? [0xFD,0xFE,0xFF] : [header.format,header.format,header.format];
-    for(let i=0; i<3; i++){
-      if(i>0 && offsets[i]===offsets[0]) continue;
-      const bd=BITDEPTH[formats[i]]; let size=sizes[i];
-      if(!size && bd) size=Math.ceil(header.width*header.height*bd/8);
-      if(!size || offsets[i]>=u8.length) continue;
-      if(offsets[i]+size>u8.length) size=u8.length-offsets[i];
-      const raw=u8.slice(offsets[i],offsets[i]+size);
-      images.push({format:formats[i], width:header.width, height:header.height, raw, rgba:decodeSubImage(formats[i],raw,header.width,header.height)});
+    if(tableValid){
+      for(let i=0; i<3; i++){
+        if(offsets[i]===undefined || offsets[i]===0xFFFFFFFF) continue;
+        if(i>0 && offsets[i]===offsets[0]) continue;
+        const bd=BITDEPTH[formats[i]]; let size=sizes[i];
+        if(!size && bd) size=Math.ceil(header.width*header.height*bd/8);
+        if(!size || offsets[i]>=u8.length) continue;
+        if(offsets[i]+size>u8.length) size=u8.length-offsets[i];
+        const raw=u8.slice(offsets[i],offsets[i]+size);
+        images.push({format:formats[i], width:header.width, height:header.height, raw, rgba:decodeSubImage(formats[i],raw,header.width,header.height)});
+      }
+    }
+    if(images.length===0){
+      // No genuine offset table — fall back to a single compressed image
+      // sitting directly after the header (matches the same real-world
+      // "TEX\0"/GPU-container variant handled in processTexBufferA3).
+      const available=u8.length-tblOff;
+      const candidates = header.format===0x0C ? [0xFD,0xFF,0xFE] : [header.format];
+      let best=null;
+      for(const fmt of candidates){
+        const bd=BITDEPTH[fmt]; if(!bd) continue;
+        const expected=Math.ceil(header.width*header.height*bd/8);
+        if(expected<=available){
+          const slack=available-expected;
+          if(best===null || slack<best.slack) best={fmt,expected,slack};
+        }
+      }
+      const chosen = (best && best.slack<=64) ? best : {fmt:candidates[0], expected:Math.min(available, Math.ceil(header.width*header.height*(BITDEPTH[candidates[0]]||8)/8))};
+      const raw=u8.slice(tblOff, tblOff+Math.min(chosen.expected,available));
+      images.push({format:chosen.fmt, width:header.width, height:header.height, raw, rgba:decodeSubImage(chosen.fmt,raw,header.width,header.height)});
     }
   } else {
     const bd = BITDEPTH[header.format];
@@ -796,6 +872,15 @@ function encodeRGBA4444(rgba, width, height){
   return out;
 }
 
+function encodeBGR888(rgba, width, height){
+  const n = width * height; const out = new Uint8Array(n*3);
+  for(let i=0; i<n; i++){
+    out[i*3] = rgba[i*4+2];   // B
+    out[i*3+1] = rgba[i*4+1]; // G
+    out[i*3+2] = rgba[i*4];   // R
+  }
+  return out;
+}
 function encodeL8(rgba, width, height){
   const n = width * height; const out = new Uint8Array(n);
   for(let i=0; i<n; i++) out[i] = Math.round(0.299*rgba[i*4] + 0.587*rgba[i*4+1] + 0.114*rgba[i*4+2]);
@@ -949,7 +1034,7 @@ function createTexFile(rgba, width, height, format, targetVersion){
 
 // Canonical FORMAT_NAMES/BITDEPTH code -> a3 format code (inverse of A3_TO_CANONICAL,
 // picking the most common/representative a3 code per canonical format)
-const CANONICAL_TO_A3={0x01:0x03, 0x02:0x03 /*no BGRA in a3, fall back to RGBA*/, 0x04:0x04, 0x07:0x01, 0x08:0x06, 0x09:0x05, 0x11:0x13, 0x15:0x17};
+const CANONICAL_TO_A3={0x01:0x03, 0x02:0x03 /*no BGRA in a3, fall back to RGBA*/, 0x04:0x04, 0x06:0x11, 0x07:0x01, 0x08:0x06, 0x09:0x05, 0x11:0x13, 0x15:0x17};
 
 function createTexFileA3(rgba, width, height, canonicalFormat){
   const a3fmt = CANONICAL_TO_A3[canonicalFormat];
@@ -961,6 +1046,7 @@ function createTexFileA3(rgba, width, height, canonicalFormat){
   else if(a3fmt===0x01) payload=encodeRGBA4444(rgba, width, height);
   else if(a3fmt===0x06) payload=encodeL8(rgba, width, height);
   else if(a3fmt===0x05) payload=encodeA8(rgba, width, height);
+  else if(a3fmt===0x11) payload=encodeBGR888(rgba, width, height);
   else if(a3fmt===0x13) payload=encodeDXT1(rgba, width, height);
   else if(a3fmt===0x17) payload=encodeDXT5(rgba, width, height);
   else throw new Error('Unsupported encode format selected for bitfield TEX\\0 target.');
