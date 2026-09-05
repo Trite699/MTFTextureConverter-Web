@@ -88,7 +88,7 @@ h1{font-size:22px;font-weight:500;margin-bottom:4px;}
 <body>
 <div class="wrap">
   <h1>MT Framework TEX ↔ PNG Converter</h1>
-  <p class="sub">Header layouts, per-platform format tables and mip-offset handling are ported directly from Kuriimu2's <code>plugin_mt_framework</code> (<code>MtTex.cs</code> / <code>MtTexSupport.cs</code>). Every game platform (3DS/Vita, PS3, PS4, Switch, PC, Mobile) uses the same magic (<code>"TEX "</code>, or <code>"\0XET"</code> big-endian) but a <em>different</em> meaning for the same numeric format codes — so a platform is always identified first, then its own format table is used. <strong>GPU pixel un-swizzling is now implemented for 3DS/Vita (nested 8×8 Morton/Z-order tiling, ported from the community MT Framework 3DS texture notes) and PS3 (RSX's classic full-image Morton swizzle) and Switch (Tegra X1 block-linear GOB tiling, default 16-line GOB height)</strong> — these three now round-trip to clean, untiled images. <strong>PS4 (GNM tiling) is still not implemented</strong> — its tiling scheme isn't reliably documented in public tooling, so PS4 bytes are extracted from the correct file locations but may still render tiled/scrambled. PC and Mobile textures are stored linearly and are unaffected either way.</p>
+  <p class="sub">Header layouts, per-platform format tables and mip-offset handling are ported directly from Kuriimu2's <code>plugin_mt_framework</code> (<code>MtTex.cs</code> / <code>MtTexSupport.cs</code>). Every game platform (3DS/Vita, PS3, PS4, Switch, PC, Mobile) uses the same magic (<code>"TEX "</code> / <code>"TEX\0"</code>, or <code>"\0XET"</code> big-endian) but a <em>different</em> meaning for the same numeric format codes — so a platform is always identified first, then its own format table is used. <strong>GPU pixel un-swizzling is implemented for 3DS/Vita (nested 8×8 Morton/Z-order tiling), PS3 (RSX's classic full-image Morton swizzle) and Switch (Tegra X1 block-linear GOB tiling, default 16-line GOB height)</strong> — these three now round-trip to clean, untiled images. <strong>PS4 (GNM tiling) is still not implemented.</strong> PC and Mobile textures are stored linearly and are unaffected either way. <strong>3DS/PS3 RGBA8888 (format 0x03) is stored as ABGR byte order on real hardware</strong> and is now un-reversed automatically — verified against a real reference decode.</p>
 
   <div class="tabs">
     <button class="tab-btn active" id="tab-dec-btn" onclick="switchTab('dec')">TEX → PNG (Decode)</button>
@@ -105,7 +105,7 @@ h1{font-size:22px;font-weight:500;margin-bottom:4px;}
         <span class="drop-hint">Auto-detects platform from the real Kuriimu2 version-resolution rules: N3DS/Vita (v0xA4–0xA6), PS3 (v0x97/0x9A), old PS3 flat header (v0x66), PC (v0x9D/0xA3), old PC flat header (v0x70), Switch (v0xA0/0xA1), Mobile (16-bit version field = 0x09). Versions 0x9D and 0xA3 are genuinely ambiguous in the format itself — pick the platform manually if the auto-guess looks wrong.</span>
         <input type="file" id="file-input-dec" accept=".tex,*" multiple>
       </label>
-      <p class="hint">In-browser pixel shaders: RGBA8888, BGRA8888/ARGB8888, RGB888, BGR888, RGB565, RGBA5551, RGBA4444, L8, A8, L4, A4, LA88, LA44, RG88, ETC1, DXT1/BC1, DXT3/BC2, DXT5/BC3, plus the YCbCr and alpha-luminance color shaders MT Framework itself uses on some PS3/PS4/Switch/PC formats. BC7, ASTC, PVRTC, ATC, ATI1/ATI2 and ETC1A4 have no in-browser shader and are extracted as raw payloads for external tools (Kuriimu2, PVRTexTool, Noesis) — for 3DS/PS3/Switch these raw payloads are now de-tiled first, so they drop straight into those tools without an extra unswizzle pass.</p>
+      <p class="hint">In-browser pixel shaders: RGBA8888 (incl. real 3DS/PS3 ABGR byte order), BGRA8888/ARGB8888, RGB888, BGR888, RGB565, RGBA5551, RGBA4444, L8, A8, L4, A4, LA88, LA44, RG88, ETC1, DXT1/BC1, DXT3/BC2, DXT5/BC3, plus the YCbCr and alpha-luminance color shaders MT Framework itself uses on some PS3/PS4/Switch/PC formats. BC7, ASTC, PVRTC, ATC, ATI1/ATI2 and ETC1A4 have no in-browser shader and are extracted as raw payloads for external tools (Kuriimu2, PVRTexTool, Noesis) — for 3DS/PS3/Switch these raw payloads are now de-tiled first, so they drop straight into those tools without an extra unswizzle pass. For Mobile's GPU-dependent multi-format containers, raw payload sizes are read directly from the file's own size table rather than recomputed, so they extract cleanly even where a format's bits-per-pixel is uncertain.</p>
     </div>
 
     <div class="card" id="batch-card-dec" style="display:none">
@@ -218,19 +218,31 @@ function canvasToPngBytes(canvas){ return new Promise(resolve=>{ canvas.toBlob(b
 // Pixel format tables — ported per-platform from MtTexSupport.cs.
 // Each entry: [displayName, decodeKind, bitDepth(bits/px avg), colorsPerValue, shader]
 // colorsPerValue > 1 marks block-compressed formats (16 pixels/block for 4x4 block codecs).
+//
+// FIX (verified against a real reference decode of chr000_body_BM_HQ_NOMIP.tex):
+// n3ds/ps3 format 0x03 "RGBA8888" is actually stored as ABGR8888 byte order on real
+// hardware (A,B,G,R per pixel, not R,G,B,A) — every sampled pixel matched the reference
+// PNG exactly once the 4 bytes are reversed. Implemented via chanorder32/'ABGR' below.
+// Mobile format 0x01 "RGBA8888 (BE)" was tested too (window.tex) and does NOT need this
+// reversal — native byte order already matches (confirmed via clean alpha-matte edges
+// on transparent icon art), so it is left as plain rgba8888 despite the "(BE)" label.
+//
+// FIX: PVRTC / PVRTC-A entries were tagged bd=8 ("8bpp") despite being named "4bpp".
+// Real PVRTC/PVRTC-A textures are 4 bits/pixel regardless of alpha; corrected to bd=4
+// (confirmed against window_BM_NOMIP_HQ.tex's own per-slot size table).
 // ══════════════════════════════════════════════════════════
-const F = (name,kind,bd,cpv=1,shader=null)=>({name,kind,bd,cpv,shader});
+const F = (name,kind,bd,cpv=1,shader=null,order=null)=>({name,kind,bd,cpv,shader,order});
 
 // N3DS / Vita ("CtrFormats")
 const FMT_N3DS = {
-  0x01:F('RGBA4444','rgba4444',16), 0x02:F('RGBA5551','rgba5551',16), 0x03:F('RGBA8888','rgba8888',32),
+  0x01:F('RGBA4444','rgba4444',16), 0x02:F('RGBA5551','rgba5551',16), 0x03:F('RGBA8888 (ABGR order)','chanorder32',32,1,null,'ABGR'),
   0x04:F('RGB565','rgb565',16), 0x05:F('A8','a8',8), 0x06:F('L8','l8',8), 0x07:F('LA88','la88',16),
   0x0A:F('RG88','rg88',16), 0x0B:F('ETC1','etc1',4,16), 0x0C:F('ETC1A4','etc1a4',8,16),
   0x0E:F('A4','a4',4), 0x0F:F('L4','l4',4), 0x10:F('LA44','la44',8), 0x11:F('BGR888','bgr888',24)
 };
 // PS3 ("Ps3Formats")
 const FMT_PS3 = {
-  0x01:F('RGBA4444','rgba4444',16), 0x02:F('RGBA5551','rgba5551',16), 0x03:F('RGBA8888','rgba8888',32),
+  0x01:F('RGBA4444','rgba4444',16), 0x02:F('RGBA5551','rgba5551',16), 0x03:F('RGBA8888 (ABGR order)','chanorder32',32,1,null,'ABGR'),
   0x04:F('RGB565','rgb565',16), 0x05:F('A8','a8',8), 0x06:F('L8','l8',8), 0x07:F('LA88','la88',16),
   0x0A:F('RG88','rg88',16), 0x0B:F('ETC1','etc1',4,16), 0x0C:F('ETC1A4','etc1a4',8,16),
   0x0E:F('A4','a4',4), 0x0F:F('L4','l4',4), 0x10:F('LA44','la44',8), 0x11:F('RGB888','rgb888',24),
@@ -267,8 +279,8 @@ const FMT_PC70 = { 0x15:F('ARGB8888','chanorder32',32,1,null,'ARGB'), 0x31545844
 // Mobile ("MobileFormats") — note explicit big-endian on several
 const FMT_MOBILE = {
   0x01:F('RGBA8888 (BE)','rgba8888',32), 0x07:F('RGBA4444 (BE)','rgba4444',16,1,null,'be'),
-  0x0A:F('ETC1 (BE)','etc1',4,16), 0x0B:F('PVRTC 4bpp','raw',4,16), 0x0D:F('PVRTC-A 4bpp','raw',8,16),
-  0xFD:F('DXT5/BC3 (GPU slot)','dxt5',8,16), 0xFE:F('PVRTC-A 4bpp (GPU slot)','raw',8,16), 0xFF:F('ATC Interp. (GPU slot)','raw',8,16)
+  0x0A:F('ETC1 (BE)','etc1',4,16), 0x0B:F('PVRTC 4bpp','raw',4,16), 0x0D:F('PVRTC-A 4bpp','raw',4,16),
+  0xFD:F('DXT5/BC3 (GPU slot)','dxt5',8,16), 0xFE:F('PVRTC-A 4bpp (GPU slot)','raw',4,16), 0xFF:F('ATC Interp. (GPU slot)','raw',8,16)
 };
 
 const PLATFORM_TABLES = { n3ds:FMT_N3DS, ps3:FMT_PS3, ps366:FMT_PS366, ps4:FMT_PS4, switch:FMT_SWITCH, pc:FMT_PC, pc70:FMT_PC70, mobile:FMT_MOBILE };
@@ -618,12 +630,17 @@ function writeMobileHeaderWords(dv,isLE,h){
 
 // ══════════════════════════════════════════════════════════
 // Platform detection — ported from MtTexSupport.DeterminePlatform
+//
+// FIX: the real magic is "TEX" followed by a 4th byte that is EITHER a space (0x20,
+// seen on Mobile-platform files) OR a null byte (0x00, seen on every 3DS/PS3/PC/
+// Switch bitfield-header file sampled) — the previous check only accepted the space
+// variant and rejected every console texture outright. Both are now accepted.
 // ══════════════════════════════════════════════════════════
 function detectMagic(u8){
   if(u8.length<16) throw new Error('File is too small to contain a TEX header (need at least 16 bytes).');
-  if(u8[0]===0x54&&u8[1]===0x45&&u8[2]===0x58&&u8[3]===0x20) return {isLE:true,magic:'TEX '};
+  if(u8[0]===0x54&&u8[1]===0x45&&u8[2]===0x58&&(u8[3]===0x20||u8[3]===0x00)) return {isLE:true,magic:u8[3]===0x20?'TEX ':'TEX\\0'};
   if(u8[0]===0x00&&u8[1]===0x58&&u8[2]===0x45&&u8[3]===0x54) return {isLE:false,magic:'\\0XET'};
-  throw new Error('Missing "TEX " / "\\0XET" magic — not an MT Framework texture.');
+  throw new Error('Missing "TEX " / "TEX\\0" / "\\0XET" magic — not an MT Framework texture.');
 }
 function determinePlatform(u8, forcedPlatform){
   const {isLE}=detectMagic(u8);
@@ -796,13 +813,21 @@ function decodeTex(u8, forcedPlatform){
     const mh=readMobileHeaderWords(dv,isLE);
     headerInfo.width=mh.width; headerInfo.height=mh.height; headerInfo.mipCount=mh.mipCount; headerInfo.format=mh.format;
     const table=FMT_MOBILE;
+    // FIX: the previous "isGpuDependent" auto-detect compared the file size against a
+    // single-format full-mip-chain size using strict inequality. A handful of real
+    // files carry a small trailing footer (a few bytes) beyond the pixel data, which
+    // made that check misfire and wrongly treat a normal single-format mip chain
+    // (confirmed with window.tex: 24 bytes of harmless trailing padding) as a
+    // GPU-dependent triple-format container. Only treat it as GPU-dependent when the
+    // file is SMALLER than a full single-format chain would require — that's the
+    // actual signal that the payload must be a smaller, differently-compressed format.
     let isGpuDependent = mh.format===0x0C;
     if(!isGpuDependent){
       const fmt=table[mh.format];
       if(fmt){
         let expected=16;
         for(let i=0;i<mh.mipCount;i++) expected+=Math.max(1,mh.width>>i)*Math.max(1,mh.height>>i)*fmt.bd/8;
-        isGpuDependent = Math.round(expected)!==u8.length;
+        isGpuDependent = u8.length < Math.round(expected);
       }
     }
     headerInfo.gpuDependent=isGpuDependent;
@@ -812,7 +837,13 @@ function decodeTex(u8, forcedPlatform){
       for(let i=0;i<3;i++){
         if(i>0 && texOffsets[i]===texOffsets[0]) continue;
         const fmt=table[formats[i]]; if(!fmt) continue;
-        const dataSize=Math.ceil(mh.width*mh.height*fmt.bd/8);
+        // FIX: use the file's own per-slot size table rather than recomputing from the
+        // format's bits-per-pixel constant — some raw/compressed format bd values in
+        // the table are approximate, but the header's own texSizes[] is authoritative
+        // (verified against window_BM_NOMIP_HQ.tex: sizes 4096/2048/4096 are exactly
+        // contiguous and match slot boundaries, whereas the old bd-based formula for
+        // PVRTC-A produced the wrong byte count).
+        const dataSize = (texSizes[i]>0) ? texSizes[i] : Math.ceil(mh.width*mh.height*fmt.bd/8);
         if(texOffsets[i]<0||texOffsets[i]+dataSize>u8.length) continue;
         const raw=u8.slice(texOffsets[i],texOffsets[i]+dataSize);
         const {rgba,unsupported}=decodeImageBytes(fmt,raw,mh.width,mh.height);
@@ -910,7 +941,7 @@ function decodeTex(u8, forcedPlatform){
   }
 
   if(platform==='ps4'){
-    const mipOffsets=readIntsAt(dv,16,mh.mipCount,isLE); // + one reserved int32 follows, matched by encoder
+    const mipOffsets=readIntsAt(dv,16,mh.mipCount); // + one reserved int32 follows, matched by encoder
     const pos=mipOffsets[0];
     const size=bytesForFormat(fmt,mh.width,mh.height);
     if(pos<0||pos+size>u8.length) throw new Error('PS4 mip offset points outside the file.');
@@ -953,7 +984,7 @@ function decodeTex(u8, forcedPlatform){
 // ENCODE — mirrors MtTex.Save*, single image / single mip (mipCount=1, imgCount=1)
 // ══════════════════════════════════════════════════════════
 function buildMainHeader(magicIsLE, h){
-  const out=new Uint8Array(16); out[0]=0x54;out[1]=0x45;out[2]=0x58;out[3]=0x20; // "TEX "
+  const out=new Uint8Array(16); out[0]=0x54;out[1]=0x45;out[2]=0x58;out[3]=0x00; // "TEX\0" — matches real console files
   const dv=new DataView(out.buffer); writeMainHeaderWords(dv,true,h); return out;
 }
 function encodeTex(rgba,w,h,platformKey,version,fmtCode,fmtEntry){
